@@ -1,10 +1,11 @@
 import 'react-native-gesture-handler';
-import React, { useEffect } from 'react';
+import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { AuthProvider, useAuth } from './config/AuthContext';
-import { firestoreService } from './services/firestoreService';
+import { FavoritesProvider } from './config/FavoritesContext';
+import firestoreService from './services/firestoreService';
 import Login from './scenes/login';
 import Signup from './scenes/signup';
 import AppNavigator from './components/Navigation';
@@ -32,21 +33,6 @@ const AuthStack = () => {
 // Root component that handles authentication state
 const RootNavigator = () => {
   const { currentUser, loading } = useAuth();
-  
-  useEffect(() => {
-    const runMigration = async () => {
-      try {
-        if (currentUser) {
-          console.log("Running data migration check...");
-          await firestoreService.migrateToNewStructure();
-        }
-      } catch (error) {
-        console.error("Migration error:", error);
-      }
-    };
-    
-    runMigration();
-  }, [currentUser]);
 
   if (loading) {
     // You could add a loading screen here if needed
@@ -65,7 +51,9 @@ const RootNavigator = () => {
 export default function App() {
   return (
     <AuthProvider>
-      <RootNavigator />
+      <FavoritesProvider>
+        <RootNavigator />
+      </FavoritesProvider>
     </AuthProvider>
   );
 }

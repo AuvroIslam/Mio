@@ -11,6 +11,8 @@ import Profile from '../scenes/Profile';
 import ChatRoom from '../scenes/ChatRoom';
 import Matched from '../scenes/Matched'; // New Matched screen
 import UserProfile from '../scenes/UserProfile'; // New UserProfile screen
+import EditProfile from '../scenes/EditProfile'; // Import EditProfile screen
+import AnimeDetails from '../scenes/AnimeDetails';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -22,7 +24,15 @@ const HomeStack = () => {
       <Stack.Screen 
         name="HomeScreen" 
         component={Home} 
-        options={{ title: 'Anime Search' }}
+        options={{ title: 'Discover Anime' }}
+      />
+      <Stack.Screen
+        name="AnimeDetails"
+        component={AnimeDetails}
+        options={({ route }) => ({ 
+          title: route.params?.anime?.title || 'Anime Details',
+          headerShown: false
+        })}
       />
     </Stack.Navigator>
   );
@@ -35,7 +45,20 @@ const ProfileStack = () => {
       <Stack.Screen 
         name="ProfileScreen" 
         component={Profile} 
-        options={{ title: 'My Profile' }}
+        options={{ title: 'Profile' }}
+      />
+      <Stack.Screen 
+        name="EditProfile" 
+        component={EditProfile} 
+        options={{ title: 'Edit Profile' }}
+      />
+      <Stack.Screen
+        name="AnimeDetails"
+        component={AnimeDetails}
+        options={({ route }) => ({ 
+          title: route.params?.anime?.title || 'Anime Details',
+          headerShown: false
+        })}
       />
     </Stack.Navigator>
   );
@@ -48,7 +71,7 @@ const ChatStack = () => {
       <Stack.Screen 
         name="Inbox" 
         component={Inbox} 
-        options={{ title: 'Inbox' }}
+        options={{ title: 'Messages' }}
       />
       <Stack.Screen 
         name="ChatRoom" 

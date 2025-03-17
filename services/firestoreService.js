@@ -14,39 +14,58 @@ import {
   writeBatch,
   addDoc,
   serverTimestamp,
-  increment
+  increment,
+  Timestamp
 } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
+import cloudinaryService from './cloudinaryService';
 
 // Number of common favorites needed to consider users as matching
 const MATCH_THRESHOLD = 3;
 
 const firestoreService = {
-  // Create a new user profile in Firestore
+  /**
+   * Creates a new user profile in Firestore
+   * @param {string} userId - The user ID
+   * @param {string} displayName - User's display name
+   * @param {string} email - User's email
+   * @returns {Promise<Object>} Result object
+   */
   createUserProfile: async (userId, displayName, email) => {
     try {
+      // Create user document in Firestore
       await setDoc(doc(db, 'users', userId), {
-        userId: userId,
+        userId,
         userName: displayName,
-        email: email,
-        createdAt: new Date(),
-        favorites: [],
-        favoritesData: {},
-        matches: [],
-        matchesData: {}
+        email,
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        photos: [], // Array of photo objects with url and publicId
+        photoURL: null, // Profile photo URL (first photo)
+        gender: '',
+        birthdate: null,
+        age: null,
+        education: '',
+        bio: '',
+        location: '',
+        matchGender: 'everyone', // Default value
+        matchLocation: 'worldwide', // Default value
+        favoriteAnimeIds: [], // For quick matching
+        favorites: [], // Array of anime IDs as strings
+        favoritesData: {}, // Object containing detailed anime data
       });
       
-      return true;
+      return { success: true };
     } catch (error) {
-      console.error('Error creating user profile:', error);
-      throw error;
+      console.error('Error creating user profile in Firestore:', error);
+      return { success: false, error: error.message };
     }
   },
 
-  // Add an anime to user's favorites with improved structure
+  // Add an anime to user's favorites with bidirectional indexing
   addFavorite: async (userId, animeData) => {
     try {
-      console.log(`Starting to add anime ${animeData.mal_id} to favorites for user ${userId}`);
+      console.log(`Adding anime ${animeData.mal_id} to favorites for user ${userId}`);
       
       // First check if anime is already in favorites
       const userRef = doc(db, 'users', userId);
@@ -69,16 +88,17 @@ const firestoreService = {
       // Start a batch write
       const batch = writeBatch(db);
       
-      // 1. Add to user's favorites array and favoritesData object
+      // 1. Add to user's favorites array, favoritesData object, and favoriteAnimeIds for matching
       batch.update(userRef, {
         favorites: arrayUnion(animeId),
+        favoriteAnimeIds: arrayUnion(animeId),
         [`favoritesData.${animeId}`]: {
           title: animeData.title,
           image: animeData.images?.jpg?.image_url || '',
           score: animeData.score || 'N/A',
           type: animeData.type || 'N/A',
           episodes: animeData.episodes || 'N/A',
-          addedAt: new Date()
+          addedAt: Timestamp.now()
         }
       });
       
@@ -90,7 +110,7 @@ const firestoreService = {
         // Add user to existing anime fans array
         batch.update(animeUserRef, {
           users: arrayUnion(userId),
-          updatedAt: new Date()
+          updatedAt: Timestamp.now()
         });
       } else {
         // Create new document for this anime with user as first fan
@@ -99,7 +119,7 @@ const firestoreService = {
           title: animeData.title,
           image: animeData.images?.jpg?.image_url || '',
           users: [userId],
-          updatedAt: new Date()
+          updatedAt: Timestamp.now()
         });
       }
       
@@ -122,10 +142,10 @@ const firestoreService = {
     }
   },
 
-  // Remove anime from favorites with improved structure
+  // Remove anime from favorites with bidirectional approach
   removeAnimeFromFavorites: async (userId, animeId) => {
     try {
-      console.log(`Starting to remove anime ${animeId} from favorites for user ${userId}`);
+      console.log(`Removing anime ${animeId} from favorites for user ${userId}`);
       
       // Convert animeId to string if it's not already
       animeId = animeId.toString();
@@ -139,52 +159,42 @@ const firestoreService = {
         throw new Error('User document not found');
       }
       
-      // Start by updating user's document first - this part usually works
-      await updateDoc(userRef, {
+      // Start a batch write
+      const batch = writeBatch(db);
+      
+      // Remove from all favorite lists and data
+      batch.update(userRef, {
         favorites: arrayRemove(animeId),
+        favoriteAnimeIds: arrayRemove(animeId),
         [`favoritesData.${animeId}`]: deleteField()
       });
-      console.log('Successfully removed from user favorites');
       
-      // Now handle the AnimeUsers collection separately with more error handling
-      try {
-        const animeUserRef = doc(db, 'animeUsers', animeId);
-        const animeUserDoc = await getDoc(animeUserRef);
+      // Update the AnimeUsers collection 
+      const animeUserRef = doc(db, 'animeUsers', animeId);
+      const animeUserDoc = await getDoc(animeUserRef);
+      
+      if (animeUserDoc.exists()) {
+        const animeData = animeUserDoc.data();
         
-        if (animeUserDoc.exists()) {
-          const animeData = animeUserDoc.data();
-          
-          // Filter out this user
-          const updatedUsers = animeData.users.filter(id => id !== userId);
-          
-          if (updatedUsers.length > 0) {
-            // Update the document with the new users array
-            await updateDoc(animeUserRef, {
-              users: updatedUsers,
-              updatedAt: new Date()
-            });
-            console.log(`Updated animeUsers/${animeId} - removed user ${userId}`);
-          } else {
-            // If no users left, try to delete the document
-            try {
-              await deleteDoc(animeUserRef);
-              console.log(`Deleted animeUsers/${animeId} - no users left`);
-            } catch (deleteError) {
-              console.error(`Failed to delete animeUsers/${animeId}:`, deleteError);
-              // If delete fails, try to update with empty array instead
-              await updateDoc(animeUserRef, {
-                users: [],
-                updatedAt: new Date()
-              });
-            }
-          }
+        // Filter out this user
+        const updatedUsers = animeData.users.filter(id => id !== userId);
+        
+        if (updatedUsers.length > 0) {
+          // Update the document with the new users array
+          batch.update(animeUserRef, {
+            users: updatedUsers,
+            updatedAt: Timestamp.now()
+          });
+        } else {
+          // If no users left, delete the document
+          batch.delete(animeUserRef);
         }
-      } catch (animeUserError) {
-        console.error('Error updating animeUsers collection:', animeUserError);
-        // Continue execution even if this part fails - the user's document was already updated
       }
       
-      // Finally update matches
+      // Commit all changes
+      await batch.commit();
+      
+      // Update matches after removing favorite
       try {
         await firestoreService.updateBidirectionalMatches(userId);
         console.log('Successfully updated matches after removing favorite');
@@ -200,7 +210,7 @@ const firestoreService = {
     }
   },
 
-  // Get user favorites - adapted for new structure
+  // Get user favorites - simplified for new structure
   getUserFavorites: async (userId) => {
     try {
       const userRef = doc(db, 'users', userId);
@@ -234,106 +244,113 @@ const firestoreService = {
     }
   },
   
-  // Fix the updateBidirectionalMatches function
-
+  // Efficient bidirectional matching using the AnimeUsers collection
   updateBidirectionalMatches: async (userId) => {
     try {
       console.log(`Starting to update matches for user ${userId}`);
       
       // Get current user's data
       const userRef = doc(db, 'users', userId);
-      await updateDoc(userRef, {
-        matches: [],
-        matchesData: {}
-      });
-      
-      // First get the user's favorites
       const userDoc = await getDoc(userRef);
+      
       if (!userDoc.exists()) {
-        return { success: true, matches: [] };
+        return { success: false, error: 'User not found' };
       }
       
       const userData = userDoc.data();
       const userFavorites = userData.favorites || [];
       
-      // If user has no favorites, we're done
+      // If user has no favorites, clear matches
       if (userFavorites.length === 0) {
+        await updateDoc(userRef, { matches: [], matchesData: {} });
         return { success: true, matches: [] };
       }
       
-      // Get all users
-      const usersQuery = query(collection(db, "users"));
-      const usersSnapshot = await getDocs(usersQuery);
+      // Using a Map to count matches
+      const potentialMatches = new Map();
       
-      const matches = [];
-      const matchesData = {};
+      // Use batch processing for better performance
+      const batchSize = 5;
       
-      // Check each user for matches
-      for (const docSnapshot of usersSnapshot.docs) {
-        const otherUserId = docSnapshot.id;
+      // Query the AnimeUsers collection for each anime this user likes
+      for (let i = 0; i < userFavorites.length; i += batchSize) {
+        const batch = userFavorites.slice(i, i + batchSize);
         
-        // Skip the current user
-        if (otherUserId === userId) continue;
-        
-        const otherUserData = docSnapshot.data();
-        const otherUserFavorites = otherUserData.favorites || [];
-        
-        // Count common favorites
-        const commonFavorites = userFavorites.filter(id => 
-          otherUserFavorites.includes(id)
-        );
-        
-        // Check if they meet the match threshold
-        if (commonFavorites.length >= MATCH_THRESHOLD) {
-          matches.push(otherUserId);
-          matchesData[otherUserId] = {
-            userName: otherUserData.userName || 'User',
-            photoURL: otherUserData.photoURL || '',
-            matchCount: commonFavorites.length
-          };
+        for (const animeId of batch) {
+          const animeUserRef = doc(db, 'animeUsers', animeId);
+          const animeUserDoc = await getDoc(animeUserRef);
           
-          // Update the other user's matches
-          try {
-            const otherUserRef = doc(db, 'users', otherUserId);
+          if (animeUserDoc.exists()) {
+            const animeData = animeUserDoc.data();
+            const otherUsers = animeData.users || [];
             
-            // First check if we need to update their matches
-            const otherUserSnapshot = await getDoc(otherUserRef);
-            if (otherUserSnapshot.exists()) {
-              const currentMatches = otherUserSnapshot.data().matches || [];
-              const currentMatchesData = otherUserSnapshot.data().matchesData || {};
-              
-              // If we're not already in their matches or data is different, update
-              if (!currentMatches.includes(userId) || 
-                  !currentMatchesData[userId] ||
-                  currentMatchesData[userId].matchCount !== commonFavorites.length) {
-                
-                await updateDoc(otherUserRef, {
-                  matches: arrayUnion(userId),
-                  [`matchesData.${userId}`]: {
-                    userName: userData.userName || 'User',
-                    photoURL: userData.photoURL || '',
-                    matchCount: commonFavorites.length
-                  }
-                });
-                
-                console.log(`Updated match for user ${otherUserId}`);
+            // Count each user who also likes this anime
+            otherUsers.forEach(otherUserId => {
+              if (otherUserId !== userId) {
+                potentialMatches.set(otherUserId, (potentialMatches.get(otherUserId) || 0) + 1);
               }
-            }
-          } catch (error) {
-            console.error(`Error updating match for user ${otherUserId}:`, error);
-            // Continue with other matches even if one fails
+            });
           }
         }
       }
       
-      // Update the user's matches
-      await updateDoc(userRef, {
-        matches: matches,
-        matchesData: matchesData
-      });
+      // Filter to users who meet the match threshold
+      const matches = [];
+      const matchesData = {};
+      
+      for (const [matchUserId, count] of potentialMatches.entries()) {
+        if (count >= MATCH_THRESHOLD) {
+          // Get this user's profile details
+          const matchUserDoc = await getDoc(doc(db, 'users', matchUserId));
+          
+          if (matchUserDoc.exists()) {
+            const matchUserData = matchUserDoc.data();
+            matches.push(matchUserId);
+            matchesData[matchUserId] = {
+              userName: matchUserData.userName || 'User',
+              photoURL: matchUserData.photoURL || '',
+              matchCount: count
+            };
+          }
+        }
+      }
+      
+      // Update current user's matches
+      await updateDoc(userRef, { matches, matchesData });
+      
+      // For each match, ensure the relationship is bidirectional
+      const batch = writeBatch(db);
+      let batchCount = 0;
+      
+      for (const matchUserId of matches) {
+        const matchUserRef = doc(db, 'users', matchUserId);
+        
+        // Update the match data for the other user
+        batch.update(matchUserRef, {
+          [`matchesData.${userId}`]: {
+            userName: userData.userName || 'User',
+            photoURL: userData.photoURL || '',
+            matchCount: potentialMatches.get(matchUserId) || 0
+          },
+          matches: arrayUnion(userId)
+        });
+        
+        batchCount++;
+        
+        // Commit in batches of 500 (Firestore limit)
+        if (batchCount >= 500) {
+          await batch.commit();
+          batchCount = 0;
+        }
+      }
+      
+      // Commit any remaining updates
+      if (batchCount > 0) {
+        await batch.commit();
+      }
       
       console.log(`Updated matches for user ${userId}: found ${matches.length} matches`);
-      return { success: true, matches: matches };
+      return { success: true, matches };
     } catch (error) {
       console.error('Error updating matches:', error);
       return { success: false, error: error.message };
@@ -423,230 +440,198 @@ const firestoreService = {
     }
   },
   
-  // Migrate from old format to new format
-  migrateToNewStructure: async () => {
+  /**
+   * Gets a user profile from Firestore
+   * @param {string} userId - The user ID
+   * @returns {Promise<Object>} Result object with user data
+   */
+  getUserProfile: async (userId) => {
     try {
-      console.log("Starting migration to new structure...");
-      
-      // Fetch all users
-      const usersSnapshot = await getDocs(collection(db, "users"));
-      
-      for (const userDoc of usersSnapshot.docs) {
-        const userId = userDoc.id;
-        const userData = userDoc.data();
-        
-        console.log(`Checking user: ${userId}`);
-        
-        // Skip if already migrated
-        if (userData.favorites && userData.favoritesData) {
-          console.log(`User ${userId} already migrated`);
-          continue;
-        }
-        
-        console.log(`Migrating user: ${userId}`);
-        
-        // Create batch for atomic updates
-        const batch = writeBatch(db);
-        const userRef = doc(db, "users", userId);
-        
-        // 1. Prepare new data structure for favorites
-        const favorites = [];
-        const favoritesData = {};
-        
-        // Convert old favourite_animes array to new structure
-        if (userData.favourite_animes && Array.isArray(userData.favourite_animes)) {
-          for (const anime of userData.favourite_animes) {
-            if (anime.mal_id) {
-              const animeId = anime.mal_id.toString();
-              favorites.push(animeId);
-              
-              favoritesData[animeId] = {
-                title: anime.title || 'Unknown',
-                image: anime.images?.jpg?.image_url || '',
-                score: anime.score || 'N/A',
-                type: anime.type || 'N/A',
-                episodes: anime.episodes || 'N/A',
-                addedAt: new Date()
-              };
-            }
-          }
-        }
-        
-        // 2. Update user document with new structure
-        await updateDoc(userRef, {
-          favorites: favorites,
-          favoritesData: favoritesData
-        });
-        
-        // 3. Add to AnimeUsers collection - do this one by one to avoid batch size limits
-        for (const animeId of favorites) {
-          try {
-            const animeUserRef = doc(db, "animeUsers", animeId);
-            const animeUserDoc = await getDoc(animeUserRef);
-            
-            if (animeUserDoc.exists()) {
-              batch.update(animeUserRef, {
-                users: arrayUnion(userId),
-                updatedAt: new Date()
-              });
-            } else {
-              batch.set(animeUserRef, {
-                animeId: animeId,
-                title: favoritesData[animeId].title,
-                image: favoritesData[animeId].image,
-                users: [userId],
-                updatedAt: new Date()
-              });
-            }
-          } catch (error) {
-            console.error(`Error updating animeUsers for anime ${animeId}:`, error);
-          }
-        }
-        
-        // Commit the batch
-        await batch.commit();
-        console.log(`Successfully migrated user ${userId}`);
-      }
-      
-      console.log("Migration completed successfully");
-      return { success: true };
-    } catch (error) {
-      console.error("Migration failed:", error);
-      return { success: false, error: error.message };
-    }
-  },
-  
-  // Fetch user profile
-  fetchUserProfile: async (userId) => {
-    try {
-      if (!userId) {
-        return { success: false, error: 'User ID is required' };
-      }
-      
       const userDoc = await getDoc(doc(db, 'users', userId));
       
       if (!userDoc.exists()) {
         return { success: false, error: 'User not found' };
       }
       
-      const userData = userDoc.data();
-      
-      // For backwards compatibility, construct favourite_animes array
-      if (userData.favoritesData && !userData.favourite_animes) {
-        const favourite_animes = Object.entries(userData.favoritesData).map(([animeId, data]) => ({
-          mal_id: parseInt(animeId),
-          title: data.title,
-          images: { jpg: { image_url: data.image } },
-          score: data.score,
-          type: data.type,
-          episodes: data.episodes
-        }));
-        
-        userData.favourite_animes = favourite_animes;
-      }
-      
-      return { success: true, data: userData };
+      return { success: true, data: userDoc.data() };
     } catch (error) {
-      console.error('Error fetching user profile:', error);
+      console.error('Error fetching user profile from Firestore:', error);
       return { success: false, error: error.message };
     }
   },
 
-  // Efficient way to update bidirectional matches
-  updateBidirectionalMatches: async (userId) => {
+  /**
+   * Updates a user profile in Firestore
+   * @param {string} userId - The user ID
+   * @param {Object} updates - The fields to update
+   * @returns {Promise<Object>} Result object
+   */
+  updateUserProfile: async (userId, updates) => {
     try {
-      console.log(`Efficiently updating matches for user ${userId}`);
+      // Add updatedAt timestamp
+      updates.updatedAt = Timestamp.now();
+      
+      // Validate profile updates
+      if (updates.bio && updates.bio.length > 150) {
+        return { success: false, error: 'Bio should be maximum 150 characters' };
+      }
+      
+      // If age is provided, ensure it's a number
+      if (updates.age !== undefined && updates.age !== null) {
+        updates.age = Number(updates.age);
+        if (isNaN(updates.age) || updates.age < 18) {
+          return { success: false, error: 'Age must be at least 18' };
+        }
+      }
+      
+      // Update the document
+      await updateDoc(doc(db, 'users', userId), updates);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating user profile in Firestore:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  /**
+   * Uploads a photo to Cloudinary and updates profile
+   * @param {string} uri - The local URI of the image
+   * @param {string} userId - The user ID
+   * @param {number} photoIndex - The photo index (0 for profile, 1-2 for additional)
+   * @returns {Promise<Object>} Result object with URL
+   */
+  uploadPhoto: async (uri, userId, photoIndex) => {
+    try {
+      // Upload to Cloudinary
+      const result = await cloudinaryService.uploadImage(uri, userId, photoIndex);
+      
+      if (!result.success) {
+        throw new Error(result.error);
+      }
       
       // Get current user data
-      const userRef = doc(db, 'users', userId);
-      const userDoc = await getDoc(userRef);
-      
-      if (!userDoc.exists()) return { success: false, error: 'User not found' };
-      
-      const userData = userDoc.data();
-      const userFavorites = userData.favorites || [];
-      
-      // If user has no favorites, clear matches
-      if (userFavorites.length === 0) {
-        await updateDoc(userRef, { matches: [], matchesData: {} });
-        return { success: true, matches: [] };
+      const userResult = await firestoreService.getUserProfile(userId);
+      if (!userResult.success) {
+        throw new Error('Failed to get user profile');
       }
       
-      // Find potential matches by collecting users who like the same anime
-      const potentialMatches = new Map();
+      // Update photos array
+      const userData = userResult.data;
+      const photos = [...(userData.photos || [])];
       
-      // For better performance, query users with batch processing
-      const batchSize = 5; // Process favorites in smaller batches
-      
-      for (let i = 0; i < userFavorites.length; i += batchSize) {
-        const batch = userFavorites.slice(i, i + batchSize);
-        
-        for (const animeId of batch) {
-          const animeRef = doc(db, 'animeUsers', animeId);
-          const animeDoc = await getDoc(animeRef);
-          
-          if (animeDoc.exists()) {
-            const users = animeDoc.data().users || [];
-            
-            // Count each user occurrence
-            users.forEach(uid => {
-              if (uid !== userId) {
-                potentialMatches.set(uid, (potentialMatches.get(uid) || 0) + 1);
-              }
-            });
-          }
-        }
+      // If replacing an existing photo, mark old publicId for deletion
+      const oldPublicId = photos[photoIndex] && photos[photoIndex].publicId;
+      if (oldPublicId) {
+        await cloudinaryService.deleteImage(oldPublicId);
       }
       
-      // Filter users who meet the match threshold
-      const matches = [];
-      const matchesData = {};
+      // Update photos array
+      photos[photoIndex] = {
+        url: result.url,
+        publicId: result.publicId,
+        assetId: result.assetId
+      };
       
-      for (const [matchUserId, count] of potentialMatches.entries()) {
-        if (count >= MATCH_THRESHOLD) {
-          const matchUserDoc = await getDoc(doc(db, 'users', matchUserId));
-          
-          if (matchUserDoc.exists()) {
-            const matchUserData = matchUserDoc.data();
-            matches.push(matchUserId);
-            matchesData[matchUserId] = {
-              userName: matchUserData.userName || 'User',
-              photoURL: matchUserData.photoURL || '',
-              matchCount: count
-            };
-          }
-        }
+      // Update Firestore
+      const updateData = {
+        photos: photos.map(photo => photo || null),
+        updatedAt: Timestamp.now()
+      };
+      
+      // If this is the profile photo (index 0), also update photoURL
+      if (photoIndex === 0) {
+        updateData.photoURL = result.url;
       }
       
-      // Update current user's matches
-      await updateDoc(userRef, { matches, matchesData });
+      await updateDoc(doc(db, 'users', userId), updateData);
       
-      console.log(`Updated matches for user ${userId}: found ${matches.length} matches`);
-      
-      // For each match, ensure bidirectionality without updating their whole document
-      for (const matchUserId of matches) {
-        try {
-          const matchUserRef = doc(db, 'users', matchUserId);
-          await updateDoc(matchUserRef, {
-            [`matchesData.${userId}`]: {
-              userName: userData.userName || 'User',
-              photoURL: userData.photoURL || '',
-              matchCount: potentialMatches.get(matchUserId) || 0
-            },
-            matches: arrayUnion(userId)
-          });
-        } catch (error) {
-          console.error(`Error updating match for ${matchUserId}:`, error);
-          // Continue with other matches even if one fails
-        }
-      }
-      
-      return { success: true, matches };
+      return {
+        success: true,
+        url: result.url,
+        publicId: result.publicId
+      };
     } catch (error) {
-      console.error('Error updating matches:', error);
+      console.error('Error uploading photo:', error);
+      return { success: false, error: error.message };
+    }
+  },
+  
+  /**
+   * Deletes a photo from Cloudinary and updates profile
+   * @param {string} userId - The user ID
+   * @param {number} photoIndex - The photo index to delete
+   * @returns {Promise<Object>} Result object
+   */
+  deletePhoto: async (userId, photoIndex) => {
+    try {
+      // Get current user data
+      const userResult = await firestoreService.getUserProfile(userId);
+      if (!userResult.success) {
+        throw new Error('Failed to get user profile');
+      }
+      
+      // Update photos array
+      const userData = userResult.data;
+      const photos = [...(userData.photos || [])];
+      
+      // If no photo at this index, just return
+      if (!photos[photoIndex]) {
+        return { success: true };
+      }
+      
+      // Get the photo to delete
+      const photoToDelete = photos[photoIndex];
+      
+      // Delete from Cloudinary
+      if (photoToDelete.publicId) {
+        await cloudinaryService.deleteImage(photoToDelete.publicId);
+      }
+      
+      // Remove or set to null
+      if (photoIndex === 0) {
+        // For profile photo, set to null rather than removing
+        photos[0] = null;
+      } else {
+        // For additional photos, remove
+        photos.splice(photoIndex, 1);
+      }
+      
+      // Update Firestore
+      const updateData = {
+        photos: photos.map(photo => photo || null),
+        updatedAt: Timestamp.now()
+      };
+      
+      // If deleting profile photo, also update photoURL
+      if (photoIndex === 0) {
+        updateData.photoURL = null;
+      }
+      
+      await updateDoc(doc(db, 'users', userId), updateData);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error deleting photo:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Fetch user profile for displaying other users
+  fetchUserProfile: async (userId) => {
+    try {
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      
+      if (!userDoc.exists()) {
+        return { success: false, error: 'User not found' };
+      }
+      
+      return { success: true, data: userDoc.data() };
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
       return { success: false, error: error.message };
     }
   }
 };
 
-export { firestoreService };
+export default firestoreService;

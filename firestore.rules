@@ -14,7 +14,10 @@ service cloud.firestore {
                      request.resource.data.diff(resource.data).affectedKeys()
                        .hasOnly(['matchesData', 'matches']);
       
+      // Allow creation only by the user themselves
       allow create: if request.auth != null && request.auth.uid == userId;
+      
+      // Never allow deletion of user profiles
       allow delete: if false;
     }
     
@@ -41,10 +44,21 @@ service cloud.firestore {
       allow read, update: if request.auth != null && 
                            request.auth.uid in resource.data.participants;
       
+      // Never allow direct deletion of chats
+      allow delete: if false;
+      
       // Messages Subcollection
       match /messages/{messageId} {
-        allow read, write: if request.auth != null && 
-                           request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        allow read: if request.auth != null && 
+                    request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+        
+        // Only allow creating messages if user is a participant and the senderId matches their ID
+        allow create: if request.auth != null && 
+                      request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants &&
+                      request.auth.uid == request.resource.data.senderId;
+        
+        // Don't allow updating or deleting existing messages
+        allow update, delete: if false;
       }
     }
   }

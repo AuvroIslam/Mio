@@ -9,7 +9,7 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { useAuth } from '../config/AuthContext';
-import { firestoreService } from '../services/firestoreService';
+import firestoreService from '../services/firestoreService';
 
 const Signup = ({ navigation }) => {
   const [email, setEmail] = useState('');

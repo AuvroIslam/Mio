@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
-import { firestoreService } from '../services/firestoreService';
+import firestoreService from '../services/firestoreService';
 
 const Matched = ({ navigation }) => {
   const [matchedUsers, setMatchedUsers] = useState([]);
@@ -91,7 +91,7 @@ const Matched = ({ navigation }) => {
       ) : (
         <FlatList
           data={matchedUsers}
-          keyExtractor={(item) => item.userId}
+          keyExtractor={(item) => `matched_user_${item.userId}_${Math.random().toString(36).substring(2,11)}`}
           renderItem={renderUserItem}
           contentContainerStyle={styles.usersList}
           ListEmptyComponent={

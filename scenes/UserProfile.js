@@ -8,11 +8,12 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Dimensions
+  Dimensions,
+  ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
-import { firestoreService } from '../services/firestoreService';
+import firestoreService from '../services/firestoreService';
 import { db } from '../config/firebaseConfig';
 
 const UserProfile = ({ route, navigation }) => {
@@ -129,7 +130,10 @@ const UserProfile = ({ route, navigation }) => {
     // Check if the anime is a mutual favorite
     const isMutual = mutualFavorites.some(fav => fav.mal_id === item.mal_id);
     return (
-      <View style={styles.animeCard}>
+      <TouchableOpacity 
+        style={styles.animeCard}
+        onPress={() => navigation.navigate('AnimeDetails', { anime: item })}
+      >
         <Image
           source={{
             uri: item.images?.jpg?.image_url || item.image || 'https://via.placeholder.com/150'
@@ -151,7 +155,7 @@ const UserProfile = ({ route, navigation }) => {
             </View>
           )}
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -184,7 +188,7 @@ const UserProfile = ({ route, navigation }) => {
   return (
     <FlatList
       data={userFavorites}
-      keyExtractor={(item, index) => (item?.mal_id?.toString() || `anime-${index}`)}
+      keyExtractor={(item, index) => `user_favorite_${item?.mal_id || index}_${Math.random().toString(36).substring(2,11)}`}
       renderItem={renderAnimeItem}
       contentContainerStyle={styles.flatListContent}
       ListHeaderComponent={
@@ -209,16 +213,26 @@ const UserProfile = ({ route, navigation }) => {
                 <Text style={styles.sectionTitle}>
                   Mutual Favorites ({mutualFavorites.length})
                 </Text>
-                <FlatList
+                <ScrollView
                   horizontal
-                  data={mutualFavorites}
-                  keyExtractor={(item, index) =>
-                    (item?.mal_id?.toString() || `mutual-${index}`)
-                  }
-                  renderItem={renderMutualItem}
-                  contentContainerStyle={styles.mutualList}
                   showsHorizontalScrollIndicator={false}
-                />
+                  contentContainerStyle={styles.mutualList}
+                >
+                  {mutualFavorites.map((item, index) => (
+                    <View key={`mutual_${item?.mal_id || index}_${Math.random().toString(36).substring(2,7)}`} style={styles.mutualItem}>
+                      <Image
+                        source={{
+                          uri: item.images?.jpg?.image_url || item.image || 'https://via.placeholder.com/150'
+                        }}
+                        style={styles.mutualImage}
+                        resizeMode="cover"
+                      />
+                      <Text style={styles.mutualTitle} numberOfLines={2}>
+                        {item.title || "Unknown Anime"}
+                      </Text>
+                    </View>
+                  ))}
+                </ScrollView>
               </View>
             )}
             <View style={styles.section}>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,126 +12,66 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
-import { firestoreService } from '../services/firestoreService';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFavorites } from '../config/FavoritesContext';
 
-const Home = ({ navigation, route }) => {
+const Home = ({ navigation }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [animeResults, setAnimeResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [favorites, setFavorites] = useState([]);
-  const [pendingAdds, setPendingAdds] = useState([]);
   const { currentUser } = useAuth();
-  
-  // Use useFocusEffect to reload favorites every time the screen comes into focus
-  // Also respond to route.params changes from Profile screen
-  useFocusEffect(
-    React.useCallback(() => {
-      if (currentUser) {
-        // Check if favoritesChanged flag was set by Profile screen
-        const favoritesChanged = route.params?.favoritesChanged;
-        
-        // Clear the flag to prevent repeated reloads
-        if (favoritesChanged) {
-          navigation.setParams({ favoritesChanged: undefined });
-        }
-        
-        // Always reload favorites when screen comes into focus or after changes
-        console.log('Home screen in focus, reloading favorites');
-        loadFavorites(true); // Pass true to force a fresh reload from Firestore
-      }
-      return () => {}; 
-    }, [currentUser, route.params?.favoritesChanged])
-  );
+  const { favorites, isInFavorites, addToFavorites, removeFromFavorites } = useFavorites();
 
-  // Load seasonal anime when component mounts
+  // Load seasonal anime on component mount
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      loadSeasonalAnime();
-    }
+    loadSeasonalAnime();
   }, []);
 
-  const loadFavorites = useCallback(async (forceRefresh = false) => {
-    if (!currentUser) return;
-    
-    try {
-      // Only show loading if it's a forced refresh
-      if (forceRefresh) {
-        setLoading(true);
-      }
-      
-      const userFavorites = await firestoreService.getUserFavorites(currentUser.uid);
-      setFavorites(userFavorites);
-      
-      // Clear any pending adds that are now in favorites
-      setPendingAdds(prev => 
-        prev.filter(id => !userFavorites.some(fav => fav.mal_id === id))
+  // Update anime results with current favorite status when favorites change
+  useEffect(() => {
+    if (animeResults.length > 0) {
+      // Update the isFavorite flag for each anime
+      setAnimeResults(prev => 
+        prev.map(anime => ({
+          ...anime,
+          isFavorite: isInFavorites(anime.mal_id)
+        }))
       );
-      
-      // Update anime results to reflect current favorite status
-      setAnimeResults(prevResults => {
-        if (!prevResults.length) return prevResults;
-        
-        // Create a map of favorite IDs for quick lookup
-        const favoriteIds = new Set(userFavorites.map(fav => fav.mal_id));
-        
-        // Return updated results with correct favorite status
-        // Only create a new array if there are changes
-        const needsUpdate = prevResults.some(anime => 
-          (favoriteIds.has(anime.mal_id) && !anime.isFavorite) || 
-          (!favoriteIds.has(anime.mal_id) && anime.isFavorite)
-        );
-        
-        if (needsUpdate) {
-          return prevResults.map(anime => ({
-            ...anime,
-            isFavorite: favoriteIds.has(anime.mal_id)
-          }));
-        }
-        
-        return prevResults;
-      });
-    } catch (error) {
-      console.error('Failed to load favorites:', error);
-      // Don't show alert for background loads
-      if (forceRefresh) {
-        Alert.alert('Error', 'Failed to refresh favorites. Please try again.');
-      }
-    } finally {
-      if (forceRefresh) {
-        setLoading(false);
-      }
     }
-  }, [currentUser]);
+  }, [favorites]);
 
-  // Fetch seasonal anime from the Jikan API
   const loadSeasonalAnime = async () => {
-    setLoading(true);
     try {
-      // Add delay for Jikan API rate limiting
-      await new Promise(resolve => setTimeout(resolve, 400));
+      setLoading(true);
+      setAnimeResults([]);
       
-      const response = await fetch(`https://api.jikan.moe/v4/seasons/now?limit=20`);
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
+      // Get current season and year
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1; // JavaScript months are 0-indexed
       
+      // Determine season based on month
+      let season;
+      if (month >= 1 && month <= 3) season = 'winter';
+      else if (month >= 4 && month <= 6) season = 'spring';
+      else if (month >= 7 && month <= 9) season = 'summer';
+      else season = 'fall';
+      
+      // Fetch seasonal anime
+      const response = await fetch(`https://api.jikan.moe/v4/seasons/${year}/${season}`);
       const data = await response.json();
       
       if (data.data) {
-        // Get favorite IDs for marking anime
-        const favoriteIds = new Set(favorites.map(fav => fav.mal_id));
-        
-        // Mark favorites in results
-        const markedResults = data.data.map(anime => ({
+        // Mark favorites in results for UI indication
+        const results = data.data.map(anime => ({
           ...anime,
-          isFavorite: favoriteIds.has(anime.mal_id)
+          isFavorite: isInFavorites(anime.mal_id)
         }));
         
-        setAnimeResults(markedResults);
+        setAnimeResults(results);
       } else {
+        // If API fails, show a message
         setAnimeResults([]);
-        Alert.alert('No Results', 'No seasonal anime found.');
+        Alert.alert('Error', 'Failed to load seasonal anime');
       }
     } catch (error) {
       console.error('Error loading seasonal anime:', error);
@@ -141,109 +81,85 @@ const Home = ({ navigation, route }) => {
     }
   };
 
-  // Search anime based on the user's query
   const searchAnime = async () => {
     if (!searchQuery.trim()) {
-      Alert.alert('Error', 'Please enter a search term');
+      // If search is empty, load seasonal anime
+      loadSeasonalAnime();
       return;
     }
-
-    setLoading(true);
+    
     try {
-      // Add delay for Jikan API rate limiting
-      await new Promise(resolve => setTimeout(resolve, 400));
+      setLoading(true);
+      setAnimeResults([]);
       
-      const response = await fetch(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(searchQuery)}&limit=20`);
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
-      }
-      
+      const response = await fetch(`https://api.jikan.moe/v4/anime?q=${searchQuery}&limit=20`);
       const data = await response.json();
       
       if (data.data) {
-        // Get favorite IDs for marking anime
-        const favoriteIds = new Set(favorites.map(fav => fav.mal_id));
-        
-        // Mark favorites in results
-        const markedResults = data.data.map(anime => ({
+        // Mark favorites in search results for UI consistency
+        const results = data.data.map(anime => ({
           ...anime,
-          isFavorite: favoriteIds.has(anime.mal_id)
+          isFavorite: isInFavorites(anime.mal_id)
         }));
         
-        setAnimeResults(markedResults);
-      } else {
-        setAnimeResults([]);
-        Alert.alert('No Results', 'No anime found matching your search');
+        setAnimeResults(results);
       }
     } catch (error) {
       console.error('Error searching anime:', error);
-      Alert.alert('Error', 'Failed to search anime. Please try again.');
+      Alert.alert('Search Error', 'Failed to search for anime. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  const addToFavorites = async (anime) => {
+  const handleSearch = () => {
+    if (searchQuery.trim()) {
+      searchAnime();
+    } else {
+      loadSeasonalAnime();
+    }
+  };
+
+  const toggleFavorite = async (anime) => {
     if (!currentUser) {
-      Alert.alert('Sign In Required', 'Please sign in to add favorites');
+      Alert.alert('Login Required', 'Please login to add favorites.');
       return;
     }
     
     try {
-      // Optimistically update UI
-      setPendingAdds(prev => [...prev, anime.mal_id]);
+      const isFavorite = isInFavorites(anime.mal_id);
       
-      // Mark as favorite in anime results
+      if (isFavorite) {
+        await removeFromFavorites(anime.mal_id);
+        Alert.alert('Success', 'Removed from favorites');
+      } else {
+        await addToFavorites(anime);
+        Alert.alert('Success', 'Added to favorites');
+      }
+      
+      // Update UI immediately
       setAnimeResults(prev => 
         prev.map(item => 
           item.mal_id === anime.mal_id 
-            ? { ...item, isFavorite: true } 
+            ? { ...item, isFavorite: !isFavorite } 
             : item
         )
       );
-      
-      // Add to Firestore
-      const result = await firestoreService.addFavorite(currentUser.uid, anime);
-      
-      if (result.success) {
-        // Success! Update local favorites list for immediate UI feedback
-        setFavorites(prev => {
-          // Only add if not already in list
-          if (!prev.some(fav => fav.mal_id === anime.mal_id)) {
-            return [...prev, anime];
-          }
-          return prev;
-        });
-        
-        Alert.alert('Success', 'Added to your favorites!');
-      } else {
-        // Revert optimistic update
-        setPendingAdds(prev => prev.filter(id => id !== anime.mal_id));
-        setAnimeResults(prev => 
-          prev.map(item => 
-            item.mal_id === anime.mal_id 
-              ? { ...item, isFavorite: false } 
-              : item
-          )
-        );
-        throw new Error(result.error || 'Failed to add to favorites');
-      }
     } catch (error) {
-      console.error('Failed to add favorite:', error);
-      setPendingAdds(prev => prev.filter(id => id !== anime.mal_id));
-      Alert.alert('Error', 'Failed to add to favorites. Please try again.');
+      console.error('Error toggling favorite:', error);
+      Alert.alert('Error', 'Failed to update favorites');
     }
   };
 
   const renderAnimeItem = ({ item }) => {
-    // Check if anime is already in favorites or pending add
-    const isFavorite = 
-      item.isFavorite || 
-      favorites.some(fav => fav.mal_id === item.mal_id) || 
-      pendingAdds.includes(item.mal_id);
+    // Check if anime is in favorites using the context
+    const isFavorite = item.isFavorite || isInFavorites(item.mal_id);
     
     return (
-      <View style={styles.animeCard}>
+      <TouchableOpacity 
+        style={styles.animeCard}
+        onPress={() => navigation.navigate('AnimeDetails', { anime: item })}
+      >
         <Image 
           source={{ uri: item.images.jpg.image_url || 'https://via.placeholder.com/150' }} 
           style={styles.animeImage}
@@ -255,63 +171,89 @@ const Home = ({ navigation, route }) => {
           <Text style={styles.animeDetail} numberOfLines={1}>Type: {item.type || 'N/A'}</Text>
           <Text style={styles.animeDetail} numberOfLines={1}>Episodes: {item.episodes || 'N/A'}</Text>
           
-          <TouchableOpacity 
-            style={[styles.favoriteButton, isFavorite && styles.disabledButton]}
-            onPress={() => addToFavorites(item)}
-            disabled={isFavorite}
-          >
-            <Ionicons 
-              name={isFavorite ? "heart" : "heart-outline"} 
-              size={18} 
-              color="#fff" 
-            />
-            <Text style={styles.favoriteButtonText}>
-              {isFavorite ? 'Added to Favorites' : 'Add to Favorites'}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.actionRow}>
+            {isFavorite ? (
+              <TouchableOpacity 
+                style={[styles.favoriteButton, styles.favoriteButtonActive]}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  toggleFavorite(item);
+                }}
+              >
+                <Ionicons name="heart-dislike" size={16} color="#fff" />
+                <Text style={styles.favoriteButtonText}>Remove</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity 
+                style={styles.favoriteButton}
+                onPress={(e) => {
+                  e.stopPropagation();
+                  toggleFavorite(item);
+                }}
+              >
+                <Ionicons name="heart" size={16} color="#fff" />
+                <Text style={styles.favoriteButtonText}>Add</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
-  
+
+  const renderEmptyState = () => (
+    <View style={styles.emptyContainer}>
+      <Ionicons name="search" size={50} color="#ccc" />
+      <Text style={styles.emptyTitle}>No Results Found</Text>
+      <Text style={styles.emptyText}>
+        Try a different search term or check out the seasonal anime.
+      </Text>
+      <TouchableOpacity 
+        style={styles.reloadButton} 
+        onPress={loadSeasonalAnime}
+      >
+        <Text style={styles.reloadButtonText}>View Seasonal Anime</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <View style={styles.container}>
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search for anime..."
+          placeholder="Search anime..."
           value={searchQuery}
           onChangeText={setSearchQuery}
-          onSubmitEditing={searchAnime}
+          onSubmitEditing={handleSearch}
+          returnKeyType="search"
         />
-        <TouchableOpacity
-          style={styles.searchButton}
-          onPress={searchAnime}
-        >
-          <Ionicons name="search" size={20} color="#fff" />
+        <TouchableOpacity style={styles.searchButton} onPress={handleSearch}>
+          <Ionicons name="search" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
       
       {loading ? (
-        <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007bff" />
+          <Text style={styles.loadingText}>
+            {searchQuery ? 'Searching...' : 'Loading Seasonal Anime...'}
+          </Text>
+        </View>
       ) : (
         <FlatList
           data={animeResults}
+          keyExtractor={(item) => item.clientKey || `anime_${item.mal_id}_${Math.random().toString(36).substring(2,11)}`}
           renderItem={renderAnimeItem}
-          keyExtractor={item => item.mal_id.toString()}
-          contentContainerStyle={styles.list}
-          ListEmptyComponent={
-            <Text style={styles.emptyText}>
-              {searchQuery ? 'No results found. Try a different search term.' : 'Loading anime...'}
-            </Text>
-          }
+          contentContainerStyle={styles.animeList}
+          ListEmptyComponent={renderEmptyState}
         />
       )}
     </View>
   );
 };
 
-// Styles remain unchanged
+// Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -339,12 +281,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 8,
     marginLeft: 10,
-  },
-  loader: {
-    marginTop: 50,
-  },
-  resultsList: {
-    paddingBottom: 20,
   },
   animeCard: {
     flexDirection: 'row',
@@ -377,28 +313,85 @@ const styles = StyleSheet.create({
     color: '#555',
     marginBottom: 3,
   },
-  favoriteButton: {
-    backgroundColor: '#ff6b6b',
+  favoriteBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 8,
-    borderRadius: 5,
+    backgroundColor: '#28a745',
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
     marginTop: 8,
   },
-  disabledButton: {
-    backgroundColor: '#28a745',
-  },
-  favoriteButtonText: {
+  favoriteBadgeText: {
     color: '#fff',
-    marginLeft: 5,
-    fontWeight: '500',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginLeft: 4,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  emptyTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginTop: 20,
+    marginBottom: 10,
   },
   emptyText: {
     textAlign: 'center',
-    marginTop: 50,
     fontSize: 16,
     color: '#666',
+    marginBottom: 20,
+  },
+  reloadButton: {
+    backgroundColor: '#007bff',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+  },
+  reloadButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginTop: 10,
+  },
+  animeList: {
+    paddingBottom: 20,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    marginTop: 8,
+  },
+  favoriteButton: {
+    backgroundColor: '#007bff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+  },
+  favoriteButtonActive: {
+    backgroundColor: '#dc3545',
+  },
+  favoriteButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginLeft: 4,
   },
 });
 

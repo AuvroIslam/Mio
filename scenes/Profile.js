@@ -10,52 +10,32 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { db } from '../config/firebaseConfig';
-import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../config/AuthContext';
-import { firestoreService } from '../services/firestoreService';
+import { useFavorites } from '../config/FavoritesContext';
+import firestoreService from '../services/firestoreService';
 
 const Profile = ({ navigation }) => {
-  const [favorites, setFavorites] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [userData, setUserData] = useState(null);
   const { currentUser, logout } = useAuth();
+  const { favorites, addToFavorites, removeFromFavorites, isInFavorites } = useFavorites();
 
-  // Load favorites when screen is focused or current user changes
+  // Load user profile when screen is focused or current user changes
   useEffect(() => {
     if (currentUser) {
-      loadFavorites();
+      loadUserProfile();
     }
     
     const unsubscribe = navigation.addListener('focus', () => {
-      if (currentUser) loadFavorites();
+      if (currentUser) {
+        loadUserProfile();
+      }
     });
     
     return unsubscribe;
   }, [navigation, currentUser]);
 
-  // Check and run data migration if needed
-  useEffect(() => {
-    const checkAndRunMigration = async () => {
-      if (!currentUser) return;
-      
-      try {
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (!userDoc.exists()) return;
-        
-        const userData = userDoc.data();
-        // Only run migration if the user has old structure
-        if (!userData.favorites && userData.favourite_animes) {
-          runMigration();
-        }
-      } catch (error) {
-        console.error("Error checking migration status:", error);
-      }
-    };
-    
-    checkAndRunMigration();
-  }, [currentUser]);
-
-  const loadFavorites = async () => {
+  const loadUserProfile = async () => {
     if (!currentUser) {
       setLoading(false);
       return;
@@ -63,69 +43,21 @@ const Profile = ({ navigation }) => {
     
     try {
       setLoading(true);
-      const favorites = await firestoreService.getUserFavorites(currentUser.uid);
-      setFavorites(favorites);
-    } catch (error) {
-      console.error('Failed to load favorites:', error);
-      Alert.alert('Error', 'Failed to load favorites');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const runMigration = async () => {
-    if (!currentUser) return;
-    
-    try {
-      setLoading(true);
-      Alert.alert('Maintenance', 'Optimizing your data, please wait...');
-      
-      // Run the migration
-      const result = await firestoreService.migrateToNewStructure();
+      const result = await firestoreService.getUserProfile(currentUser.uid);
       
       if (result.success) {
-        // Force reload favorites
-        await loadFavorites();
-        console.log('Migration completed successfully');
+        setUserData(result.data);
       } else {
-        console.error('Migration failed:', result.error);
+        console.error('Failed to load user profile:', result.error);
       }
     } catch (error) {
-      console.error('Migration error:', error);
+      console.error('Error loading user profile:', error);
+      Alert.alert('Error', 'Failed to load user profile');
     } finally {
       setLoading(false);
     }
   };
 
-  const removeFromFavorites = async (anime) => {
-    if (!anime?.mal_id) {
-      Alert.alert('Error', 'Invalid anime data');
-      return;
-    }
-    
-    try {
-      // Update UI first for better user experience
-      setFavorites(prev => prev.filter(fav => fav.mal_id !== anime.mal_id));
-      
-      // Then remove from backend
-      await firestoreService.removeAnimeFromFavorites(currentUser.uid, anime.mal_id);
-      
-      // Set navigation parameter to signal Home screen that favorites changed
-      // This is the key part to notify Home.js about the change
-      navigation.navigate('Home', { favoritesChanged: true });
-      
-      Alert.alert('Success', `${anime.title} removed from favorites`);
-    } catch (error) {
-      console.error('Error removing from favorites:', error);
-      
-      // If there was an error, reload favorites to ensure UI is in sync
-      loadFavorites();
-      
-      Alert.alert('Error', 'Failed to remove from favorites. Please try again.');
-    }
-  };
-
-  // Update the handleLogout function to not navigate to Login
   const handleLogout = async () => {
     try {
       // Just logout - the AuthContext will handle the navigation
@@ -136,8 +68,28 @@ const Profile = ({ navigation }) => {
     }
   };
 
+  const toggleFavorite = async (anime) => {
+    try {
+      const isFavorite = isInFavorites(anime.mal_id);
+      
+      if (isFavorite) {
+        await removeFromFavorites(anime.mal_id);
+        Alert.alert('Success', 'Removed from favorites');
+      } else {
+        await addToFavorites(anime);
+        Alert.alert('Success', 'Added to favorites');
+      }
+    } catch (error) {
+      console.error('Error toggling favorite:', error);
+      Alert.alert('Error', 'Failed to update favorites');
+    }
+  };
+
   const renderFavoriteItem = ({ item }) => (
-    <View style={styles.animeCard}>
+    <TouchableOpacity 
+      style={styles.animeCard}
+      onPress={() => navigation.navigate('AnimeDetails', { anime: item })}
+    >
       <Image 
         source={{ uri: item.images?.jpg?.image_url || 'https://via.placeholder.com/150' }} 
         style={styles.animeImage}
@@ -150,51 +102,186 @@ const Profile = ({ navigation }) => {
         <Text style={styles.animeDetail} numberOfLines={1}>Episodes: {item.episodes || 'N/A'}</Text>
         
         <TouchableOpacity 
-          style={styles.removeButton}
-          onPress={() => removeFromFavorites(item)}
+          style={[styles.favoriteButton, styles.favoriteButtonActive]}
+          onPress={(e) => {
+            e.stopPropagation();
+            toggleFavorite(item);
+          }}
         >
-          <Ionicons name="trash-outline" size={18} color="#fff" />
-          <Text style={styles.removeButtonText}>Remove</Text>
+          <Ionicons name="heart-dislike" size={16} color="#fff" />
+          <Text style={styles.favoriteButtonText}>Remove</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.profileHeader}>
-        <View style={styles.profileInfo}>
+  const renderPhotoGallery = () => {
+    const photos = userData?.photos || [];
+    const hasPhotos = photos.length > 0 && photos.some(photo => photo !== null);
+    
+    if (!hasPhotos) {
+      return (
+        <View style={styles.photoPlaceholder}>
           <Ionicons name="person-circle" size={80} color="#007bff" />
-          <View style={styles.userInfo}>
+          <Text style={styles.photoPlaceholderText}>No photos added yet</Text>
+        </View>
+      );
+    }
+    
+    return (
+      <FlatList
+        horizontal
+        data={photos.filter(photo => photo !== null)}
+        keyExtractor={(_, index) => `photo_${index}`}
+        showsHorizontalScrollIndicator={false}
+        renderItem={({item, index}) => (
+          <Image 
+            source={{ uri: item.url }} 
+            style={[
+              styles.galleryPhoto, 
+              index === 0 ? styles.profilePhoto : styles.additionalPhoto
+            ]}
+            resizeMode="cover"
+          />
+        )}
+        style={styles.photoGallery}
+      />
+    );
+  };
+
+  const renderProfileDetails = () => {
+    if (!userData) return null;
+    
+    return (
+      <View style={styles.profileDetails}>
+        <View style={styles.infoRow}>
+          <Ionicons name="person" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Name:</Text>
+          <Text style={styles.infoValue}>{currentUser?.displayName || 'User'}</Text>
+        </View>
+        
+        {userData.gender && (
+          <View style={styles.infoRow}>
+            <Ionicons name="transgender" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Gender:</Text>
+            <Text style={styles.infoValue}>{userData.gender}</Text>
+          </View>
+        )}
+        
+        {userData.age && (
+          <View style={styles.infoRow}>
+            <Ionicons name="calendar" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Age:</Text>
+            <Text style={styles.infoValue}>{userData.age}</Text>
+          </View>
+        )}
+        
+        {userData.education && (
+          <View style={styles.infoRow}>
+            <Ionicons name="school" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Education:</Text>
+            <Text style={styles.infoValue}>{userData.education}</Text>
+          </View>
+        )}
+        
+        {userData.location && (
+          <View style={styles.infoRow}>
+            <Ionicons name="location" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Location:</Text>
+            <Text style={styles.infoValue}>{userData.location}</Text>
+          </View>
+        )}
+        
+        {userData.bio && (
+          <View style={styles.bioContainer}>
+            <Text style={styles.bioLabel}>About Me:</Text>
+            <Text style={styles.bioText}>{userData.bio}</Text>
+          </View>
+        )}
+        
+        <View style={styles.infoRow}>
+          <Ionicons name="mail" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Email:</Text>
+          <Text style={styles.infoValue}>{currentUser?.email}</Text>
+        </View>
+        
+        <View style={styles.infoRow}>
+          <Ionicons name="heart" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Favorites:</Text>
+          <Text style={styles.infoValue}>{favorites.length}</Text>
+        </View>
+      </View>
+    );
+  };
+  
+  const renderHeader = () => {
+    return (
+      <>
+        <View style={styles.profileHeader}>
+          {renderPhotoGallery()}
+          
+          <View style={styles.headerContent}>
             <Text style={styles.username}>{currentUser?.displayName || 'User'}</Text>
-            <Text style={styles.email}>{currentUser?.email}</Text>
-            <Text style={styles.favoriteCount}>
-              {favorites.length} {favorites.length === 1 ? 'Favorite' : 'Favorites'}
-            </Text>
+            
+            <View style={styles.buttonContainer}>
+              <TouchableOpacity 
+                style={styles.editProfileButton} 
+                onPress={() => navigation.navigate('EditProfile')}
+              >
+                <Ionicons name="create-outline" size={20} color="#fff" />
+                <Text style={styles.editProfileText}>Edit Profile</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+                <Ionicons name="log-out-outline" size={20} color="#fff" />
+                <Text style={styles.logoutText}>Logout</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
         
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color="#fff" />
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.profileCard}>
+          <Text style={styles.sectionTitle}>Profile Information</Text>
+          {renderProfileDetails()}
+        </View>
+        
+        <View style={styles.favoritesContainer}>
+          <Text style={styles.sectionTitle}>Favorite Anime</Text>
+          {favorites.length === 0 && (
+            <Text style={styles.emptyMessage}>
+              No favorites yet. Discover anime and add them to your favorites!
+            </Text>
+          )}
+        </View>
+      </>
+    );
+  };
 
-      <Text style={styles.sectionTitle}>My Favorite Anime</Text>
-      
-      {loading ? (
+  if (loading) {
+    return (
+      <View style={styles.container}>
         <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
-      ) : (
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      {favorites.length > 0 ? (
         <FlatList
           data={favorites}
-          keyExtractor={(item) => item.mal_id.toString()}
+          keyExtractor={(item) => item.clientKey || `favorite_${item.mal_id}_${Math.random().toString(36).substring(2,11)}`}
           renderItem={renderFavoriteItem}
-          contentContainerStyle={styles.favoritesList}
-          ListEmptyComponent={
-            <Text style={styles.emptyText}>
-              You haven't added any favorites yet.
-            </Text>
-          }
+          ListHeaderComponent={renderHeader}
+          contentContainerStyle={styles.listContent}
+        />
+      ) : (
+        <FlatList
+          data={[]}
+          keyExtractor={() => "empty"}
+          renderItem={() => null}
+          ListHeaderComponent={renderHeader}
+          contentContainerStyle={styles.listContent}
         />
       )}
     </View>
@@ -207,6 +294,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     padding: 15,
   },
+  listContent: {
+    paddingBottom: 20,
+  },
   profileHeader: {
     backgroundColor: '#fff',
     borderRadius: 10,
@@ -214,28 +304,57 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     elevation: 2,
   },
-  profileInfo: {
-    flexDirection: 'row',
+  photoGallery: {
+    marginBottom: 15,
+  },
+  galleryPhoto: {
+    marginRight: 10,
+    borderRadius: 10,
+  },
+  profilePhoto: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+  },
+  additionalPhoto: {
+    width: 80,
+    height: 80,
+    borderRadius: 10,
+  },
+  photoPlaceholder: {
     alignItems: 'center',
     marginBottom: 15,
   },
-  userInfo: {
-    marginLeft: 15,
-    flex: 1,
+  photoPlaceholderText: {
+    marginTop: 5,
+    color: '#666',
+  },
+  headerContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   username: {
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 'bold',
+    color: '#333',
   },
-  email: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
+  buttonContainer: {
+    flexDirection: 'row',
   },
-  favoriteCount: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 5,
+  editProfileButton: {
+    backgroundColor: '#007bff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    borderRadius: 5,
+    marginRight: 10,
+  },
+  editProfileText: {
+    color: '#fff',
+    marginLeft: 5,
+    fontWeight: '500',
   },
   logoutButton: {
     backgroundColor: '#dc3545',
@@ -250,13 +369,55 @@ const styles = StyleSheet.create({
     marginLeft: 5,
     fontWeight: '500',
   },
+  profileCard: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 20,
+    elevation: 2,
+  },
+  profileDetails: {
+    marginTop: 10,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  infoIcon: {
+    marginRight: 10,
+  },
+  infoLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#555',
+    marginRight: 5,
+    width: 80,
+  },
+  infoValue: {
+    fontSize: 16,
+    color: '#333',
+    flex: 1,
+  },
+  bioContainer: {
+    marginBottom: 15,
+  },
+  bioLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#555',
+    marginBottom: 5,
+  },
+  bioText: {
+    fontSize: 16,
+    color: '#333',
+    lineHeight: 22,
+  },
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
     marginBottom: 15,
-  },
-  favoritesList: {
-    paddingBottom: 20,
+    color: '#333',
   },
   animeCard: {
     flexDirection: 'row',
@@ -285,23 +446,34 @@ const styles = StyleSheet.create({
     color: '#555',
     marginBottom: 3,
   },
-  removeButton: {
-    backgroundColor: '#dc3545',
+  favoriteButton: {
+    backgroundColor: '#007bff',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 8,
-    borderRadius: 5,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 20,
     marginTop: 8,
+    alignSelf: 'flex-start',
   },
-  removeButtonText: {
+  favoriteButtonActive: {
+    backgroundColor: '#dc3545',
+  },
+  favoriteButtonText: {
     color: '#fff',
-    marginLeft: 5,
-    fontWeight: '500',
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginLeft: 4,
   },
-  emptyText: {
+  favoritesContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 20,
+    elevation: 2,
+  },
+  emptyMessage: {
     textAlign: 'center',
-    marginTop: 50,
     fontSize: 16,
     color: '#666',
   },
