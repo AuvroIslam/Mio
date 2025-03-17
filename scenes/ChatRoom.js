@@ -12,7 +12,6 @@ import {
   Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { db } from '../config/firebaseConfig';
 import {
   collection,
   query,
@@ -21,97 +20,140 @@ import {
   addDoc,
   updateDoc,
   doc,
-  serverTimestamp
+  serverTimestamp,
+  limit,
+  getDocs,
+  startAfter,
+  increment
 } from 'firebase/firestore';
 import { useAuth } from '../config/AuthContext';
+import { db } from '../config/firebaseConfig';
 
 const ChatRoom = ({ route, navigation }) => {
-  // Provide a default empty object for route.params to prevent errors
-  const params = route?.params || {};
-  const { chatId, userName } = params;
+  const { chatId, userName, otherUserId } = route.params || {};
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
+  const [lastMessageDoc, setLastMessageDoc] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const { currentUser } = useAuth();
   const flatListRef = useRef(null);
 
-  // Check if required parameters are present
+  // Function to load paginated messages
+  const loadMessages = async (startAfterDoc = null) => {
+    let q = query(
+      collection(db, "chats", chatId, "messages"),
+      orderBy("timestamp", "desc"),
+      limit(20)
+    );
+    if (startAfterDoc) {
+      q = query(
+        collection(db, "chats", chatId, "messages"),
+        orderBy("timestamp", "desc"),
+        startAfter(startAfterDoc),
+        limit(20)
+      );
+    }
+    const snapshot = await getDocs(q);
+    const loadedMessages = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    return { messages: loadedMessages, lastVisible: snapshot.docs[snapshot.docs.length - 1] };
+  };
+
   useEffect(() => {
     if (!chatId) {
-      Alert.alert(
-        "Error",
-        "Chat information is missing. Please try again.",
-        [{ text: "OK", onPress: () => navigation.goBack() }]
-      );
+      Alert.alert("Error", "Chat information is missing. Please try again.", [
+        { text: "OK", onPress: () => navigation.goBack() }
+      ]);
       return;
     }
-    // Use the subcollection 'messages' under the chat document
-    const messagesRef = collection(db, "chats", chatId, "messages");
-    const q = query(messagesRef, orderBy("timestamp", "asc"));
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const messageList = [];
-      snapshot.forEach((doc) => {
-        messageList.push({
+    // Listen for realtime updates to messages
+    const unsubscribe = onSnapshot(
+      query(collection(db, "chats", chatId, "messages"), orderBy("timestamp", "desc"), limit(20)),
+      (snapshot) => {
+        const messageList = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
-        });
-      });
-      setMessages(messageList);
-      setLoading(false);
-
-      // Scroll to bottom on new messages
-      if (messageList.length > 0) {
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+        }));
+        setMessages(messageList);
+        setLastMessageDoc(snapshot.docs[snapshot.docs.length - 1]);
+        setLoading(false);
+        // Scroll to bottom for new messages
+        if (messageList.length > 0) {
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }
+      },
+      (error) => {
+        console.error("Error fetching messages:", error);
+        Alert.alert("Error", "Failed to load messages");
+        setLoading(false);
       }
-    }, (error) => {
-      console.error("Error fetching messages:", error);
-      Alert.alert("Error", "Failed to load messages");
-      setLoading(false);
-    });
+    );
 
+    // Mark messages as read by resetting unread count
+    const markAsRead = async () => {
+      try {
+        const chatDocRef = doc(db, "chats", chatId);
+        await updateDoc(chatDocRef, {
+          [`unreadCount.${currentUser.uid}`]: 0
+        });
+      } catch (error) {
+        console.error("Error marking messages as read:", error);
+      }
+    };
+    markAsRead();
     return () => unsubscribe();
-  }, [chatId, navigation]);
+  }, [chatId, navigation, currentUser]);
 
+  // Load more messages when scrolling up
+  const loadMoreMessages = async () => {
+    if (!lastMessageDoc || loadingMore) return;
+    setLoadingMore(true);
+    const { messages: newMessages, lastVisible } = await loadMessages(lastMessageDoc);
+    setMessages(prev => [...prev, ...newMessages]);
+    setLastMessageDoc(lastVisible);
+    setLoadingMore(false);
+  };
+
+  // Send message function with immediate input clear for better UX
   const sendMessage = async () => {
     if (!message.trim() || !chatId) return;
-
     try {
       const newMessage = {
-        senderId: currentUser?.uid,
+        senderId: currentUser.uid,
         text: message.trim(),
         timestamp: serverTimestamp()
       };
-
-      // Save message in the subcollection 'messages'
+      setMessage(''); // Clear input immediately
       await addDoc(collection(db, "chats", chatId, "messages"), newMessage);
-
-      // Update the last message in the chat document
+      // Update chat metadata (last message, timestamp, and increment unread for recipient)
       const chatDocRef = doc(db, "chats", chatId);
       await updateDoc(chatDocRef, {
         lastMessage: message.trim(),
-        lastMessageTime: serverTimestamp()
+        lastMessageTimestamp: serverTimestamp(),
+        lastSenderId: currentUser.uid,
+        [`unreadCount.${otherUserId}`]: increment(1)
       });
-
-      // Clear the input
-      setMessage('');
     } catch (error) {
       console.error('Error sending message:', error);
       Alert.alert("Error", "Failed to send message");
     }
   };
 
+  // Render a single message bubble
   const renderMessage = ({ item }) => {
-    const isCurrentUser = item.senderId === currentUser?.uid;
+    const isCurrentUser = item.senderId === currentUser.uid;
     return (
       <View style={[
         styles.messageContainer,
         isCurrentUser ? styles.currentUserMessage : styles.otherUserMessage
       ]}>
         <Text style={[
-          styles.messageText, 
+          styles.messageText,
           isCurrentUser ? styles.currentUserText : styles.otherUserText
         ]}>
           {item.text}
@@ -137,34 +179,22 @@ const ChatRoom = ({ route, navigation }) => {
   }
 
   return (
-    <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : null}
-      style={styles.container}
-      keyboardVerticalOffset={100}
-    >
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : null} style={styles.container} keyboardVerticalOffset={100}>
       {loading ? (
         <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
       ) : (
         <>
-          {messages.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="chatbubble-ellipses-outline" size={60} color="#ccc" />
-              <Text style={styles.emptyText}>No messages yet</Text>
-              <Text style={styles.emptySubtext}>
-                Send a message to start chatting with {userName || "this user"}
-              </Text>
-            </View>
-          ) : (
-            <FlatList
-              ref={flatListRef}
-              data={messages}
-              keyExtractor={(item) => item.id}
-              renderItem={renderMessage}
-              contentContainerStyle={styles.messagesList}
-              onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
-            />
-          )}
-          
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={item => item.id}
+            renderItem={renderMessage}
+            contentContainerStyle={styles.messagesList}
+            inverted
+            onEndReached={loadMoreMessages}
+            onEndReachedThreshold={0.5}
+            ListFooterComponent={loadingMore ? <ActivityIndicator size="small" color="#007bff" /> : null}
+          />
           <View style={styles.inputContainer}>
             <TextInput
               style={styles.input}
@@ -173,16 +203,8 @@ const ChatRoom = ({ route, navigation }) => {
               onChangeText={setMessage}
               multiline
             />
-            <TouchableOpacity 
-              style={styles.sendButton} 
-              onPress={sendMessage}
-              disabled={!message.trim()}
-            >
-              <Ionicons 
-                name="send" 
-                size={24} 
-                color={message.trim() ? "#fff" : "#b3d9ff"} 
-              />
+            <TouchableOpacity style={styles.sendButton} onPress={sendMessage} disabled={!message.trim()}>
+              <Ionicons name="send" size={24} color={message.trim() ? "#fff" : "#b3d9ff"} />
             </TouchableOpacity>
           </View>
         </>
@@ -192,85 +214,87 @@ const ChatRoom = ({ route, navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
+  container: { 
+    flex: 1, 
+    backgroundColor: '#e9eff5'
   },
   centered: {
     justifyContent: 'center',
     alignItems: 'center'
   },
-  loader: {
-    marginTop: 20,
-  },
   messagesList: {
-    padding: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    paddingBottom: 20
   },
-  messageContainer: {
-    marginVertical: 5,
-    padding: 10,
-    borderRadius: 8,
-    maxWidth: '80%'
+  loader: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center'
   },
-  currentUserMessage: {
-    backgroundColor: '#007bff',
-    alignSelf: 'flex-end'
+  messageContainer: { 
+    padding: 10, 
+    marginVertical: 5, 
+    borderRadius: 12, 
+    maxWidth: '80%',
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 2
   },
-  otherUserMessage: {
-    backgroundColor: '#e5e5ea',
-    alignSelf: 'flex-start'
+  currentUserMessage: { 
+    alignSelf: 'flex-end', 
+    backgroundColor: '#007bff'
   },
-  messageText: {
-    fontSize: 16,
-    color: '#fff'
+  otherUserMessage: { 
+    alignSelf: 'flex-start', 
+    backgroundColor: '#f0f0f0'
+  },
+  messageText: { 
+    fontSize: 16 
   },
   currentUserText: {
     color: '#fff'
   },
   otherUserText: {
-    color: '#000'
+    color: '#333'
   },
-  timestamp: {
-    fontSize: 10,
-    marginTop: 5,
-    color: '#ccc',
-    textAlign: 'right'
+  timestamp: { 
+    fontSize: 12, 
+    marginTop: 5, 
+    alignSelf: 'flex-end' 
   },
-  inputContainer: {
-    flexDirection: 'row',
-    padding: 10,
+  currentUserTimestamp: {
+    color: 'rgba(255, 255, 255, 0.8)'
+  },
+  otherUserTimestamp: {
+    color: 'rgba(0, 0, 0, 0.5)'
+  },
+  inputContainer: { 
+    flexDirection: 'row', 
+    padding: 10, 
+    backgroundColor: '#fff', 
     borderTopWidth: 1,
-    borderColor: '#ddd',
-    alignItems: 'center'
+    borderTopColor: '#ddd'
   },
-  input: {
-    flex: 1,
-    backgroundColor: '#f1f1f1',
+  input: { 
+    flex: 1, 
+    padding: 10, 
+    borderWidth: 1, 
+    borderColor: '#ddd', 
     borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    fontSize: 16,
-    marginRight: 10
+    maxHeight: 100,
+    backgroundColor: '#f9f9f9'
   },
-  sendButton: {
-    backgroundColor: '#007bff',
-    padding: 10,
-    borderRadius: 20
-  },
-  emptyContainer: {
-    flex: 1,
+  sendButton: { 
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
     alignItems: 'center',
-    justifyContent: 'center'
-  },
-  emptyText: {
-    fontSize: 18,
-    marginTop: 10,
-    color: '#555'
-  },
-  emptySubtext: {
-    fontSize: 14,
-    marginTop: 5,
-    color: '#888'
+    backgroundColor: '#007bff', 
+    borderRadius: 22, 
+    marginLeft: 8
   }
 });
 

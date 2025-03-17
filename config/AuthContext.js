@@ -33,8 +33,18 @@ export const AuthProvider = ({ children }) => {
   };
 
   // Function to log out the current user
-  const logout = () => {
-    return signOut(auth);
+  const logout = async () => {
+    try {
+      // Sign out from Firebase
+      await signOut(auth);
+      
+      // The RootNavigator in App.js will automatically switch to the auth screens
+      // when currentUser becomes null
+      return true;
+    } catch (error) {
+      console.error("Logout error:", error);
+      throw error;
+    }
   };
 
   // Function to reset password

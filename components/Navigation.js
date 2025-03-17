@@ -59,6 +59,12 @@ const ChatStack = () => {
           tabBarStyle: { display: 'none' }
         })}
       />
+      {/* Also add UserProfile to the ChatStack so users can view profiles from chats */}
+      <Stack.Screen
+        name="UserProfile"
+        component={UserProfile}
+        options={({ route }) => ({ title: route.params?.userName || 'User Profile' })}
+      />
     </Stack.Navigator>
   );
 };
@@ -122,18 +128,18 @@ const AppNavigator = () => {
         options={{ headerShown: false }}
       />
       <Tab.Screen 
-  name="Chat" 
-  component={ChatStack} 
-  options={{ 
-    headerShown: false,  // Hide the tab navigator header
-    tabBarStyle: (route) => {
-      const routeName = getFocusedRouteNameFromRoute(route) ?? '';
-      return routeName === 'ChatRoom' 
-        ? { display: 'none' }  // Hide tab bar in chat room
-        : {};  // Show tab bar in Inbox
-    }
-  }} 
-/>
+        name="Chat" 
+        component={ChatStack} 
+        options={({ route }) => {
+          const routeName = getFocusedRouteNameFromRoute(route) ?? '';
+          return {
+            headerShown: false,
+            tabBarStyle: routeName === 'ChatRoom' 
+              ? { display: 'none' } 
+              : undefined
+          };
+        }}
+      />
       <Tab.Screen 
         name="Profile" 
         component={ProfileStack} 

@@ -10,35 +10,25 @@ import {
   Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { db } from '../config/firebaseConfig';
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs
-} from 'firebase/firestore';
 import { useAuth } from '../config/AuthContext';
+import { firestoreService } from '../services/firestoreService';
 
 const Matched = ({ navigation }) => {
   const [matchedUsers, setMatchedUsers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [favorites, setFavorites] = useState([]);
   const { currentUser } = useAuth();
 
   useEffect(() => {
     const loadData = async () => {
       if (currentUser) {
-        // Important: we load favorites first, then find matches
         setLoading(true);
         try {
-          const favs = await loadFavorites();
-          if (favs.length > 0) {
-            await findMatchedUsers(favs);
-          } else {
-            setMatchedUsers([]);
-          }
+          // Get matches from Firestore
+          const matches = await firestoreService.getMatches(currentUser.uid);
+          console.log("Fetched matches:", matches);
+          setMatchedUsers(matches);
         } catch (error) {
-          console.error("Error loading data:", error);
+          console.error("Error loading matches:", error);
           Alert.alert('Error', 'Failed to load matches');
         } finally {
           setLoading(false);
@@ -48,96 +38,13 @@ const Matched = ({ navigation }) => {
     
     loadData();
     
+    // Refresh data when the screen comes into focus
     const unsubscribe = navigation.addListener('focus', () => {
       if (currentUser) loadData();
     });
     
     return unsubscribe;
   }, [navigation, currentUser]);
-
-  const loadFavorites = async () => {
-    try {
-      const favsQuery = query(
-        collection(db, "favorites"),
-        where("userId", "==", currentUser.uid)
-      );
-      const favsSnapshot = await getDocs(favsQuery);
-      
-      // Log the first document to check structure
-      
-      
-      // Access mal_id from animeData field
-      const favs = favsSnapshot.docs.map(doc => {
-        const data = doc.data();
-        return data.animeData ? data.animeData.mal_id : null;
-      }).filter(id => id !== null);
-      
-     
-      setFavorites(favs);
-      return favs; // Return the favorites array for immediate use
-    } catch (error) {
-      console.error("Failed to load favorites:", error);
-      Alert.alert('Error', 'Failed to load favorites');
-      return []; // Return empty array in case of error
-    }
-  };
-
-  const findMatchedUsers = async (myFavorites) => {
-    try {
-      // Exit early if user has no favorites
-      if (!myFavorites || myFavorites.length === 0) {
-        setMatchedUsers([]);
-        return;
-      }
-      
-      const usersRef = collection(db, "users");
-      const usersSnapshot = await getDocs(usersRef);
-      const potentialMatches = [];
-
-      for (const userDoc of usersSnapshot.docs) {
-        const userData = userDoc.data();
-        
-        // Skip if this is the current user or if user data is missing
-        if (!userData || userData.uid === currentUser.uid) continue;
-
-        const theirFavsQuery = query(
-          collection(db, "favorites"),
-          where("userId", "==", userData.uid)
-        );
-        const theirFavsSnapshot = await getDocs(theirFavsQuery);
-        
-        // Access mal_id from animeData field
-        const theirFavorites = theirFavsSnapshot.docs.map(doc => {
-          const data = doc.data();
-          return data.animeData ? data.animeData.mal_id : null;
-        }).filter(id => id !== null);
-        
-        // Find common favorites
-        const common = myFavorites.filter(id => theirFavorites.includes(id));
-        
-        console.log(`Common with ${userData.displayName || 'User'}:`, common.length);
-        
-        // Only include users with 3 or more matches
-        if (common.length >= 3) { // Changed from 3 to 1 for testing - change back to 3 for production
-          potentialMatches.push({
-            userId: userData.uid,
-            userName: userData.displayName || 'Anime Fan',
-            matches: common.length,
-            photoURL: userData.photoURL || null,
-            email: userData.email || ''
-          });
-        }
-      }
-
-      // Sort matches by number of common favorites (highest first)
-      setMatchedUsers(potentialMatches.sort((a, b) => b.matches - a.matches));
-      console.log("Found matches:", potentialMatches.length);
-    } catch (error) {
-      console.error('Failed to find matches:', error);
-      Alert.alert('Error', 'Failed to find matched users');
-      setMatchedUsers([]);
-    }
-  };
 
   const navigateToUserProfile = (user) => {
     navigation.navigate('UserProfile', { 
@@ -204,6 +111,7 @@ const Matched = ({ navigation }) => {
   );
 };
 
+// Styles remain unchanged
 const styles = StyleSheet.create({
   container: {
     flex: 1,

@@ -8,296 +8,292 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  ScrollView
+  Dimensions
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { db } from '../config/firebaseConfig';
-import { 
-  collection, 
-  query, 
-  where, 
-  getDocs,
-  addDoc
-} from 'firebase/firestore';
 import { useAuth } from '../config/AuthContext';
+import { firestoreService } from '../services/firestoreService';
+import { db } from '../config/firebaseConfig';
 
 const UserProfile = ({ route, navigation }) => {
-  const { userId, userName, matchCount } = route.params;
+  const { userId } = route.params;
+  const [user, setUser] = useState(null);
   const [userFavorites, setUserFavorites] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [mutualFavorites, setMutualFavorites] = useState([]);
+  const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
 
   useEffect(() => {
-    if (userId) {
-      loadUserFavorites();
-    }
-  }, [userId]);
+    const loadData = async () => {
+      try {
+        setLoading(true);
+        // Fetch viewed user's profile
+        const userProfile = await firestoreService.fetchUserProfile(userId);
+        if (!userProfile.success) {
+          throw new Error(userProfile.error || "Couldn't fetch user profile");
+        }
+        const userData = userProfile.data;
+        setUser(userData);
 
-  const loadUserFavorites = async () => {
-    try {
-      setLoading(true);
-      
-      // Get user's favorites
-      const favoritesRef = collection(db, "favorites");
-      const userFavQuery = query(favoritesRef, where("userId", "==", userId));
-      const userFavSnapshot = await getDocs(userFavQuery);
-      
-      const favorites = [];
-      userFavSnapshot.forEach((doc) => {
-        favorites.push({
-          id: doc.id,
-          ...doc.data().animeData
-        });
-      });
-      
-      setUserFavorites(favorites);
-      
-      // Get current user's favorites to find mutual ones
-      if (currentUser) {
-        const myFavoritesRef = collection(db, "favorites");
-        const myFavQuery = query(myFavoritesRef, where("userId", "==", currentUser.uid));
-        const myFavSnapshot = await getDocs(myFavQuery);
-        
-        const myFavoritesIds = [];
-        myFavSnapshot.forEach((doc) => {
-          myFavoritesIds.push(doc.data().animeData.mal_id);
-        });
-        
-        // Find mutual favorites
-        const mutual = favorites.filter(fav => myFavoritesIds.includes(fav.mal_id));
-        setMutualFavorites(mutual);
+        // Handle different data structures for favorites
+        let favorites = [];
+        if (userData.favorites && userData.favoritesData) {
+          // New format: use both the favorites array and favoritesData object
+          const favoriteIds = userData.favorites || [];
+          console.log(`User has ${favoriteIds.length} favorites in IDs array`);
+          for (const animeId of favoriteIds) {
+            const data = userData.favoritesData[animeId] || {};
+            favorites.push({
+              mal_id: parseInt(animeId),
+              title: data.title || 'Unknown Anime',
+              images: { jpg: { image_url: data.image || 'https://via.placeholder.com/150' } },
+              score: data.score || 'N/A',
+              type: data.type || 'N/A',
+              episodes: data.episodes || 'N/A'
+            });
+          }
+          console.log(`Converted ${favorites.length} favorites from new format`);
+        } else if (userData.favourite_animes && userData.favourite_animes.length > 0) {
+          // Old format: direct array of anime objects
+          favorites = userData.favourite_animes;
+          console.log(`Using old format: found ${favorites.length} favorites`);
+        }
+
+        // Filter valid anime objects
+        favorites = favorites.filter(anime =>
+          anime && anime.mal_id && typeof anime.mal_id === 'number'
+        );
+        console.log(`Final filtered favorites count: ${favorites.length}`);
+        setUserFavorites(favorites);
+
+        // Get mutual favorites with current user's favorites
+        if (currentUser?.uid) {
+          const currentUserFavs = await firestoreService.getUserFavorites(currentUser.uid);
+          if (currentUserFavs.length > 0) {
+            const currentUserFavsMap = new Map();
+            currentUserFavs.forEach(fav => {
+              if (fav && fav.mal_id) {
+                currentUserFavsMap.set(fav.mal_id, true);
+              }
+            });
+            const mutual = favorites.filter(anime =>
+              anime && anime.mal_id && currentUserFavsMap.has(anime.mal_id)
+            );
+            console.log(`Found ${mutual.length} mutual favorites`);
+            setMutualFavorites(mutual);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading profile:', error);
+        Alert.alert('Error', 'Failed to load user profile: ' + error.message);
+      } finally {
+        setLoading(false);
       }
-      
+    };
+
+    if (userId) {
+      loadData();
+    }
+  }, [userId, currentUser]);
+
+  const handleChatPress = async () => {
+    try {
+      if (!currentUser || !userId) {
+        Alert.alert('Error', 'User information is missing');
+        return;
+      }
+      setLoading(true);
+      const result = await firestoreService.createChat(currentUser.uid, userId);
+      if (result.success) {
+        navigation.navigate('Chat', {
+          screen: 'ChatRoom',
+          params: {
+            chatId: result.chatId,
+            userName: user?.userName || 'User',
+            otherUserId: userId
+          }
+        });
+      } else {
+        throw new Error(result.error || 'Failed to create chat');
+      }
     } catch (error) {
-      console.error('Failed to load user favorites:', error);
-      Alert.alert('Error', 'Failed to load user favorites');
+      console.error('Chat error:', error);
+      Alert.alert('Error', 'Failed to start chat: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
-  const startChat = async () => {
-    try {
-      const chatsRef = collection(db, "chats");
-      const q = query(
-        chatsRef,
-        where("participants", "array-contains", currentUser.uid)
-      );
-      
-      const snapshot = await getDocs(q);
-      let existingChat = null;
-  
-      snapshot.forEach(doc => {
-        const participants = doc.data().participants;
-        if (participants.includes(userId)) {
-          existingChat = doc;
-        }
-      });
-  
-      if (existingChat) {
-        navigation.navigate('Chat', {
-          screen: 'ChatRoom',
-          params: { chatId: existingChat.id, userName: userName }
-        });
-      } else {
-        const newChatRef = await addDoc(chatsRef, {
-          participants: [currentUser.uid, userId],
-          createdAt: new Date(),
-          lastMessage: "Chat started",
-          lastMessageTime: new Date()
-        });
-    
-        navigation.navigate('Chat', {
-          screen: 'ChatRoom',
-          params: { chatId: newChatRef.id, userName: userName }
-        });
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to start chat');
-    }
-  };
-  
-  const renderAnimeItem = ({ item }) => (
-    <View style={styles.animeCard}>
-      <Image 
-        source={{ uri: item.images.jpg.image_url || 'https://via.placeholder.com/150' }} 
-        style={styles.animeImage}
-        resizeMode="cover"
-      />
-      <View style={styles.animeInfo}>
-        <Text style={styles.animeTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.animeDetail}>Rating: {item.score || 'N/A'}</Text>
-        <Text style={styles.animeDetail} numberOfLines={1}>Type: {item.type || 'N/A'}</Text>
-        <Text style={styles.animeDetail} numberOfLines={1}>Episodes: {item.episodes || 'N/A'}</Text>
-        
-        {mutualFavorites.some(fav => fav.mal_id === item.mal_id) && (
-          <View style={styles.mutualBadge}>
-            <Ionicons name="heart" size={12} color="#fff" />
-            <Text style={styles.mutualText}>Both Like</Text>
-          </View>
-        )}
-      </View>
-    </View>
-  );
-
-  return (
-    <View style={styles.container}>
-      <ScrollView>
-        <View style={styles.profileHeader}>
-          <View style={styles.profileInfo}>
-            <Ionicons name="person-circle" size={80} color="#007bff" />
-            <View style={styles.userInfo}>
-              <Text style={styles.username}>{userName}</Text>
-              <Text style={styles.matchInfo}>
-                <Ionicons name="heart" size={16} color="#ff6b6b" /> 
-                <Text style={styles.matchCount}> {matchCount}</Text> anime in common
-              </Text>
+  const renderAnimeItem = ({ item }) => {
+    if (!item) return null;
+    // Check if the anime is a mutual favorite
+    const isMutual = mutualFavorites.some(fav => fav.mal_id === item.mal_id);
+    return (
+      <View style={styles.animeCard}>
+        <Image
+          source={{
+            uri: item.images?.jpg?.image_url || item.image || 'https://via.placeholder.com/150'
+          }}
+          style={styles.animeImage}
+          resizeMode="cover"
+        />
+        <View style={styles.animeInfo}>
+          <Text style={styles.animeTitle} numberOfLines={2}>
+            {item.title || "Unknown Anime"}
+          </Text>
+          <Text style={styles.animeDetail}>Rating: {item.score || 'N/A'}</Text>
+          <Text style={styles.animeDetail}>Type: {item.type || 'N/A'}</Text>
+          <Text style={styles.animeDetail}>Episodes: {item.episodes || 'N/A'}</Text>
+          {isMutual && (
+            <View style={styles.mutualBadge}>
+              <Ionicons name="heart" size={12} color="#fff" />
+              <Text style={styles.mutualText}>Mutual Favorite</Text>
             </View>
-          </View>
-          
-          <TouchableOpacity 
-            style={styles.chatButton} 
-            onPress={startChat}
-          >
-            <Ionicons name="chatbubble-outline" size={20} color="#fff" />
-            <Text style={styles.chatButtonText}>Start Chat</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.mutualSection}>
-          <Text style={styles.sectionTitle}>Mutual Favorites ({mutualFavorites.length})</Text>
-          {mutualFavorites.length > 0 ? (
-            <ScrollView horizontal={true} showsHorizontalScrollIndicator={false}>
-              {mutualFavorites.map(anime => (
-                <View key={anime.mal_id} style={styles.mutualItem}>
-                  <Image 
-                    source={{ uri: anime.images.jpg.image_url || 'https://via.placeholder.com/150' }} 
-                    style={styles.mutualImage}
-                    resizeMode="cover"
-                  />
-                  <Text style={styles.mutualTitle} numberOfLines={1}>{anime.title}</Text>
-                </View>
-              ))}
-            </ScrollView>
-          ) : (
-            <Text style={styles.noMutualText}>No mutual favorites found</Text>
           )}
         </View>
+      </View>
+    );
+  };
 
-        <Text style={styles.sectionTitle}>{userName}'s Favorites</Text>
-        
-        {loading ? (
-          <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
-        ) : (
-          <FlatList
-            data={userFavorites}
-            keyExtractor={(item) => item.mal_id.toString()}
-            renderItem={renderAnimeItem}
-            scrollEnabled={false}
-            contentContainerStyle={styles.favoritesList}
-            ListEmptyComponent={
-              <Text style={styles.emptyText}>
-                This user hasn't added any favorites yet.
+  const renderMutualItem = ({ item }) => {
+    if (!item) return null;
+    return (
+      <View style={styles.mutualItem}>
+        <Image
+          source={{
+            uri: item.images?.jpg?.image_url || item.image || 'https://via.placeholder.com/150'
+          }}
+          style={styles.mutualImage}
+          resizeMode="cover"
+        />
+        <Text style={styles.mutualTitle} numberOfLines={2}>
+          {item.title || "Unknown Anime"}
+        </Text>
+      </View>
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007bff" />
+      </View>
+    );
+  }
+
+  return (
+    <FlatList
+      data={userFavorites}
+      keyExtractor={(item, index) => (item?.mal_id?.toString() || `anime-${index}`)}
+      renderItem={renderAnimeItem}
+      contentContainerStyle={styles.flatListContent}
+      ListHeaderComponent={
+        <>
+          <View style={styles.profileHeader}>
+            <View style={styles.userInfo}>
+              <Ionicons name="person-circle" size={80} color="#007bff" />
+              <Text style={styles.username}>{user?.userName || 'User'}</Text>
+              <Text style={styles.email}>{user?.email}</Text>
+              <Text style={styles.favoriteCount}>
+                {userFavorites.length} Favorite{userFavorites.length !== 1 && 's'}
               </Text>
-            }
-          />
-        )}
-      </ScrollView>
-    </View>
+            </View>
+            {currentUser?.uid !== userId && (
+              <TouchableOpacity style={styles.chatButton} onPress={handleChatPress}>
+                <Ionicons name="chatbubble-outline" size={20} color="#fff" />
+                <Text style={styles.chatButtonText}>Message</Text>
+              </TouchableOpacity>
+            )}
+            {mutualFavorites.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>
+                  Mutual Favorites ({mutualFavorites.length})
+                </Text>
+                <FlatList
+                  horizontal
+                  data={mutualFavorites}
+                  keyExtractor={(item, index) =>
+                    (item?.mal_id?.toString() || `mutual-${index}`)
+                  }
+                  renderItem={renderMutualItem}
+                  contentContainerStyle={styles.mutualList}
+                  showsHorizontalScrollIndicator={false}
+                />
+              </View>
+            )}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Favorites</Text>
+            </View>
+          </View>
+        </>
+      }
+      ListFooterComponent={<View style={styles.listFooter} />}
+      ListEmptyComponent={<Text style={styles.emptyText}>No favorites added</Text>}
+    />
   );
 };
 
+const { width } = Dimensions.get('window');
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  flatListContent: {
+    padding: 15,
     backgroundColor: '#f5f5f5',
   },
+  listFooter: {
+    height: 100,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   profileHeader: {
+    alignItems: 'center',
+    marginBottom: 20,
     backgroundColor: '#fff',
     borderRadius: 10,
     padding: 15,
-    margin: 15,
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.5,
   },
-  profileInfo: {
-    flexDirection: 'row',
+  userInfo: {
     alignItems: 'center',
     marginBottom: 15,
   },
-  userInfo: {
-    marginLeft: 15,
-    flex: 1,
-  },
   username: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
+    marginTop: 10,
   },
-  matchInfo: {
-    fontSize: 16,
+  email: {
     color: '#666',
-    marginTop: 5,
-    flexDirection: 'row',
-    alignItems: 'center',
+    marginBottom: 5,
   },
-  matchCount: {
-    fontWeight: 'bold',
-    color: '#ff6b6b',
+  favoriteCount: {
+    color: '#666',
   },
   chatButton: {
     backgroundColor: '#007bff',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 5,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 5,
   },
   chatButtonText: {
     color: '#fff',
-    marginLeft: 8,
+    marginLeft: 5,
     fontWeight: '500',
-    fontSize: 16,
   },
-  mutualSection: {
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 15,
-    marginHorizontal: 15,
-    marginBottom: 15,
+  section: {
+    marginBottom: 20,
+    width: '100%',
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    marginBottom: 15,
-    marginTop: 5,
-    marginHorizontal: 15,
-  },
-  mutualItem: {
-    width: 120,
-    marginRight: 15,
-  },
-  mutualImage: {
-    width: 120,
-    height: 180,
-    borderRadius: 8,
-    marginBottom: 5,
-  },
-  mutualTitle: {
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  noMutualText: {
-    fontSize: 14,
-    color: '#666',
-    fontStyle: 'italic',
-  },
-  favoritesList: {
-    paddingHorizontal: 15,
-    paddingBottom: 20,
+    marginBottom: 10,
+    alignSelf: 'flex-start',
   },
   animeCard: {
     flexDirection: 'row',
@@ -306,55 +302,66 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     overflow: 'hidden',
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.5,
   },
   animeImage: {
     width: 100,
     height: 150,
+    backgroundColor: '#f0f0f0',
   },
   animeInfo: {
     flex: 1,
-    padding: 12,
-    justifyContent: 'space-between',
+    padding: 15,
   },
   animeTitle: {
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 5,
+    marginBottom: 6,
   },
   animeDetail: {
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 3,
+    color: '#666',
+    marginTop: 3,
   },
   mutualBadge: {
     backgroundColor: '#ff6b6b',
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 12,
+    marginTop: 10,
     alignSelf: 'flex-start',
-    marginTop: 5,
   },
   mutualText: {
     color: '#fff',
+    marginLeft: 5,
     fontSize: 12,
+  },
+  mutualList: {
+    paddingHorizontal: 5,
+    paddingBottom: 10,
+  },
+  mutualItem: {
+    marginHorizontal: 8,
+    width: 120,
+  },
+  mutualImage: {
+    width: 120,
+    height: 180,
+    borderRadius: 8,
+    backgroundColor: '#f0f0f0',
+  },
+  mutualTitle: {
+    textAlign: 'center',
+    marginTop: 5,
+    fontSize: 14,
     fontWeight: '500',
-    marginLeft: 4,
+    width: 120,
   },
   emptyText: {
     textAlign: 'center',
+    color: '#999',
     marginTop: 20,
-    fontSize: 16,
-    color: '#666',
-  },
-  loader: {
-    marginTop: 20,
+    marginBottom: 20,
   },
 });
 

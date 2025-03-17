@@ -8,27 +8,25 @@ import {
   Alert,
   ActivityIndicator
 } from 'react-native';
-import { setDoc, doc } from 'firebase/firestore';
 import { useAuth } from '../config/AuthContext';
-import { db } from '../config/firebaseConfig';
-import { collection, addDoc } from 'firebase/firestore';
+import { firestoreService } from '../services/firestoreService';
 
 const Signup = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-
   const [loading, setLoading] = useState(false);
   
-  const { signup,updateUserProfile} = useAuth();
+  const { signup, updateUserProfile } = useAuth();
 
   const handleSignup = async () => {
+    // Validate inputs
     if (!email || !password || !name) {
       Alert.alert('Error', 'Please fill in all fields');
       return;
     }
     
-    if (name.length < 5) {  // Changed from: if (name < 5)
+    if (name.length < 5) {
       Alert.alert('Error', 'Name should be at least 5 characters');
       return;
     }
@@ -40,25 +38,24 @@ const Signup = ({ navigation }) => {
     
     try {
       setLoading(true);
-    const userCredential = await signup(email, password);
-    // Add display name after successful signup
-    await updateUserProfile({
-      displayName: name
-    });
-
-    // Create user document in Firestore
-    // Updated code using setDoc with UID as the document ID
-
-
-// ...
-await setDoc(doc(db, "users", userCredential.user.uid), {
-  uid: userCredential.user.uid,
-  displayName: name,
-  email: email,
-  createdAt: new Date()
-});
-
-  }
+      
+      // Create user with Firebase Authentication
+      const userCredential = await signup(email, password);
+      
+      // Update display name
+      await updateUserProfile({ displayName: name });
+      
+      // Create user profile in Firestore
+      await firestoreService.createUserProfile(
+        userCredential.user.uid,
+        name,
+        email
+      );
+      
+      // Navigate to Home screen on successful signup
+      // The navigation back to the main app should happen in AuthContext
+      // after the user has been authenticated
+    }
     catch (error) {
       let errorMessage = 'Failed to create an account';
       
@@ -93,7 +90,6 @@ await setDoc(doc(db, "users", userCredential.user.uid), {
         onChangeText={setName}
       />
 
-
       <TextInput
         style={styles.input}
         placeholder="Email"
@@ -110,8 +106,6 @@ await setDoc(doc(db, "users", userCredential.user.uid), {
         value={password}
         onChangeText={setPassword}
       />
-
-   
 
       <TouchableOpacity 
         style={[styles.button, loading && styles.buttonDisabled]} 
@@ -134,6 +128,7 @@ await setDoc(doc(db, "users", userCredential.user.uid), {
   );
 };
 
+// Styles remain unchanged
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -157,14 +152,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   button: {
-    backgroundColor: '#28a745', // Different color for signup
+    backgroundColor: '#28a745',
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
     marginBottom: 15,
   },
   buttonDisabled: {
-    backgroundColor: '#8dd9a1', // Lighter green when disabled
+    backgroundColor: '#8dd9a1',
   },
   buttonText: {
     color: '#fff',

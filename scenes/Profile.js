@@ -11,85 +11,126 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../config/firebaseConfig';
-import { collection, query, where, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../config/AuthContext';
+import { firestoreService } from '../services/firestoreService';
 
 const Profile = ({ navigation }) => {
   const [favorites, setFavorites] = useState([]);
   const [loading, setLoading] = useState(true);
   const { currentUser, logout } = useAuth();
 
+  // Load favorites when screen is focused or current user changes
   useEffect(() => {
     if (currentUser) {
       loadFavorites();
     }
     
-    // Reload favorites when screen is focused
     const unsubscribe = navigation.addListener('focus', () => {
-      if (currentUser) {
-        loadFavorites();
-      }
+      if (currentUser) loadFavorites();
     });
     
     return unsubscribe;
   }, [navigation, currentUser]);
 
-  // In Profile.js, update the loadFavorites function:
-const loadFavorites = async () => {
-  if (!currentUser) {
-    setLoading(false);
-    return;
-  }
-  
-  try {
-    setLoading(true);
-    const favoritesRef = collection(db, "favorites");
-    const q = query(favoritesRef, where("userId", "==", currentUser.uid));
-    const querySnapshot = await getDocs(q);
-    
-    const userFavorites = [];
-    querySnapshot.forEach((doc) => {
-      userFavorites.push({
-        firebaseId: doc.id,
-        ...doc.data().animeData
-      });
-    });
-    
-    setFavorites(userFavorites);
-  } catch (error) {
-    console.error('Failed to load favorites:', error);
-    Alert.alert('Error', 'Failed to load favorites');
-  } finally {
-    setLoading(false);
-  }
-};
-  const removeFromFavorites = async (anime) => {
-    try {
-      if (!anime.firebaseId) {
-        throw new Error("Favorite not found in database");
+  // Check and run data migration if needed
+  useEffect(() => {
+    const checkAndRunMigration = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) return;
+        
+        const userData = userDoc.data();
+        // Only run migration if the user has old structure
+        if (!userData.favorites && userData.favourite_animes) {
+          runMigration();
+        }
+      } catch (error) {
+        console.error("Error checking migration status:", error);
       }
-      
-      const docRef = doc(db, "favorites", anime.firebaseId);
-      await deleteDoc(docRef);
-      
-      // Update local state
-      const updatedFavorites = favorites.filter(
-        favorite => favorite.firebaseId !== anime.firebaseId
-      );
-      setFavorites(updatedFavorites);
-      
-      Alert.alert('Removed', 'Anime removed from favorites');
+    };
+    
+    checkAndRunMigration();
+  }, [currentUser]);
+
+  const loadFavorites = async () => {
+    if (!currentUser) {
+      setLoading(false);
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      const favorites = await firestoreService.getUserFavorites(currentUser.uid);
+      setFavorites(favorites);
     } catch (error) {
-      console.error('Error removing from favorites:', error);
-      Alert.alert('Error', 'Failed to remove from favorites');
+      console.error('Failed to load favorites:', error);
+      Alert.alert('Error', 'Failed to load favorites');
+    } finally {
+      setLoading(false);
     }
   };
-  
 
+  const runMigration = async () => {
+    if (!currentUser) return;
+    
+    try {
+      setLoading(true);
+      Alert.alert('Maintenance', 'Optimizing your data, please wait...');
+      
+      // Run the migration
+      const result = await firestoreService.migrateToNewStructure();
+      
+      if (result.success) {
+        // Force reload favorites
+        await loadFavorites();
+        console.log('Migration completed successfully');
+      } else {
+        console.error('Migration failed:', result.error);
+      }
+    } catch (error) {
+      console.error('Migration error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const removeFromFavorites = async (anime) => {
+    if (!anime?.mal_id) {
+      Alert.alert('Error', 'Invalid anime data');
+      return;
+    }
+    
+    try {
+      // Update UI first for better user experience
+      setFavorites(prev => prev.filter(fav => fav.mal_id !== anime.mal_id));
+      
+      // Then remove from backend
+      await firestoreService.removeAnimeFromFavorites(currentUser.uid, anime.mal_id);
+      
+      // Set navigation parameter to signal Home screen that favorites changed
+      // This is the key part to notify Home.js about the change
+      navigation.navigate('Home', { favoritesChanged: true });
+      
+      Alert.alert('Success', `${anime.title} removed from favorites`);
+    } catch (error) {
+      console.error('Error removing from favorites:', error);
+      
+      // If there was an error, reload favorites to ensure UI is in sync
+      loadFavorites();
+      
+      Alert.alert('Error', 'Failed to remove from favorites. Please try again.');
+    }
+  };
+
+  // Update the handleLogout function to not navigate to Login
   const handleLogout = async () => {
     try {
+      // Just logout - the AuthContext will handle the navigation
       await logout();
-      // No need to navigate - the AuthContext will handle this
+      // No need to navigate manually - App.js will switch to AuthStack
     } catch (error) {
       Alert.alert('Logout Error', error.message);
     }
@@ -98,7 +139,7 @@ const loadFavorites = async () => {
   const renderFavoriteItem = ({ item }) => (
     <View style={styles.animeCard}>
       <Image 
-        source={{ uri: item.images.jpg.image_url || 'https://via.placeholder.com/150' }} 
+        source={{ uri: item.images?.jpg?.image_url || 'https://via.placeholder.com/150' }} 
         style={styles.animeImage}
         resizeMode="cover"
       />
@@ -172,10 +213,6 @@ const styles = StyleSheet.create({
     padding: 15,
     marginBottom: 20,
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.5,
   },
   profileInfo: {
     flexDirection: 'row',
@@ -228,10 +265,6 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     overflow: 'hidden',
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.5,
   },
   animeImage: {
     width: 100,
