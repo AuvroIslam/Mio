@@ -738,6 +738,50 @@ const firestoreService = {
       console.error('Error fetching user profile:', error);
       return { success: false, error: error.message };
     }
+  },
+
+  // Get user subscription data
+  getUserSubscription: async (userId) => {
+    try {
+      const userSubscriptionRef = doc(db, 'userSubscriptions', userId);
+      const docSnap = await getDoc(userSubscriptionRef);
+      
+      if (docSnap.exists()) {
+        return {
+          success: true,
+          data: docSnap.data()
+        };
+      } else {
+        return {
+          success: true,
+          data: null
+        };
+      }
+    } catch (error) {
+      console.error('Error getting user subscription:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
+  // Update user subscription data
+  updateUserSubscription: async (userId, subscriptionData) => {
+    try {
+      const userSubscriptionRef = doc(db, 'userSubscriptions', userId);
+      await setDoc(userSubscriptionRef, subscriptionData, { merge: true });
+      
+      return {
+        success: true
+      };
+    } catch (error) {
+      console.error('Error updating user subscription:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
 };
 

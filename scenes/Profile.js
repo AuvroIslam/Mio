@@ -18,7 +18,7 @@ const Profile = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null);
   const { currentUser, logout } = useAuth();
-  const { favorites, addToFavorites, removeFromFavorites, isInFavorites } = useFavorites();
+  const { favorites } = useFavorites();
 
   // Load user profile when screen is focused or current user changes
   useEffect(() => {
@@ -68,23 +68,6 @@ const Profile = ({ navigation }) => {
     }
   };
 
-  const toggleFavorite = async (anime) => {
-    try {
-      const isFavorite = isInFavorites(anime.mal_id);
-      
-      if (isFavorite) {
-        await removeFromFavorites(anime.mal_id);
-        Alert.alert('Success', 'Removed from favorites');
-      } else {
-        await addToFavorites(anime);
-        Alert.alert('Success', 'Added to favorites');
-      }
-    } catch (error) {
-      console.error('Error toggling favorite:', error);
-      Alert.alert('Error', 'Failed to update favorites');
-    }
-  };
-
   const renderFavoriteItem = ({ item }) => (
     <TouchableOpacity 
       style={styles.animeCard}
@@ -100,17 +83,6 @@ const Profile = ({ navigation }) => {
         <Text style={styles.animeDetail}>Rating: {item.score || 'N/A'}</Text>
         <Text style={styles.animeDetail} numberOfLines={1}>Type: {item.type || 'N/A'}</Text>
         <Text style={styles.animeDetail} numberOfLines={1}>Episodes: {item.episodes || 'N/A'}</Text>
-        
-        <TouchableOpacity 
-          style={[styles.favoriteButton, styles.favoriteButtonActive]}
-          onPress={(e) => {
-            e.stopPropagation();
-            toggleFavorite(item);
-          }}
-        >
-          <Ionicons name="heart-dislike" size={16} color="#fff" />
-          <Text style={styles.favoriteButtonText}>Remove</Text>
-        </TouchableOpacity>
       </View>
     </TouchableOpacity>
   );

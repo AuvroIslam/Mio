@@ -14,10 +14,31 @@ service cloud.firestore {
                      request.resource.data.diff(resource.data).affectedKeys()
                        .hasOnly(['matchesData', 'matches']);
       
+      // Allow updating subscription-related fields
+      allow update: if request.auth != null && 
+                     request.auth.uid == userId && 
+                     request.resource.data.diff(resource.data).affectedKeys()
+                       .hasAny(['subscription', 'subscriptionData', 'weeklyStats', 'lastResetDate', 'favorites']);
+      
       // Allow creation only by the user themselves
       allow create: if request.auth != null && request.auth.uid == userId;
       
       // Never allow deletion of user profiles
+      allow delete: if false;
+    }
+    
+    // User Subscriptions Collection
+    match /userSubscriptions/{userId} {
+      // Allow users to read their own subscription data
+      allow read: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow users to create/update their own subscription data
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow matching service to update subscription data during bidirectional matching
+      allow update: if request.auth != null;
+      
+      // Never allow deletion of subscription data
       allow delete: if false;
     }
     

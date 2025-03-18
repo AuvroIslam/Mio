@@ -8,7 +8,8 @@ import {
   ScrollView,
   Dimensions,
   ActivityIndicator,
-  Alert
+  Alert,
+  Modal
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
@@ -21,7 +22,7 @@ const AnimeDetails = ({ route, navigation }) => {
   const [loading, setLoading] = useState(false);
   const [animeDetails, setAnimeDetails] = useState(null);
   const { currentUser } = useAuth();
-  const { isInFavorites, addToFavorites, removeFromFavorites } = useFavorites();
+  const { isInFavorites, addToFavorites, removeFromFavorites, processingFavorite } = useFavorites();
   
   // Determine if anime is in favorites
   const isFavorite = isInFavorites(anime.mal_id);
@@ -65,33 +66,56 @@ const AnimeDetails = ({ route, navigation }) => {
       return;
     }
     
+    // If already processing a favorite operation, don't allow another one
+    if (processingFavorite) {
+      return;
+    }
+    
     try {
-      setLoading(true);
-      
-      let result;
+      let success;
       if (isFavorite) {
         // Remove from favorites
-        result = await removeFromFavorites(anime.mal_id);
-        if (result.success) {
+        success = await removeFromFavorites(anime.mal_id);
+        if (success) {
           Alert.alert('Success', `${anime.title} removed from favorites`);
         }
+        // Otherwise removeFromFavorites will show its own alert
       } else {
         // Add to favorites
-        result = await addToFavorites(anime);
-        if (result.success) {
+        success = await addToFavorites(anime);
+        if (success) {
           Alert.alert('Success', `${anime.title} added to favorites`);
         }
+        // Otherwise addToFavorites will show its own alert
       }
       
-      if (!result.success) {
-        throw new Error(result.error || 'Failed to update favorites');
-      }
+      // We don't need to throw errors here - the FavoritesContext
+      // already shows appropriate alerts for subscription limits
     } catch (error) {
       console.error('Error toggling favorite:', error);
       Alert.alert('Error', error.message || 'Failed to update favorites');
-    } finally {
-      setLoading(false);
     }
+  };
+
+  // Loading modal component
+  const renderLoadingModal = () => {
+    return (
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={processingFavorite}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <ActivityIndicator size="large" color="#007bff" />
+            <Text style={styles.modalText}>
+              {isFavorite ? 'Adding to favorites...' : 'Removing from favorites...'}
+            </Text>
+          </View>
+        </View>
+      </Modal>
+    );
   };
 
   const renderGenres = () => {
@@ -119,6 +143,7 @@ const AnimeDetails = ({ route, navigation }) => {
 
   return (
     <ScrollView style={styles.container}>
+      {renderLoadingModal()}
       <View style={styles.header}>
         <Image 
           source={{ uri: animeDetails.images?.jpg?.large_image_url || animeDetails.images?.jpg?.image_url || 'https://via.placeholder.com/300x450' }} 
@@ -134,9 +159,12 @@ const AnimeDetails = ({ route, navigation }) => {
           </TouchableOpacity>
           
           <TouchableOpacity 
-            style={styles.favoriteButton}
+            style={[
+              styles.favoriteButton,
+              processingFavorite && styles.disabledButton
+            ]}
             onPress={toggleFavorite}
-            disabled={loading}
+            disabled={processingFavorite}
           >
             {loading ? (
               <ActivityIndicator size="small" color="#fff" />
@@ -229,12 +257,13 @@ const AnimeDetails = ({ route, navigation }) => {
         <TouchableOpacity 
           style={[
             styles.actionButton, 
-            isFavorite ? styles.removeButton : styles.addButton
+            isFavorite ? styles.removeButton : styles.addButton,
+            processingFavorite && styles.disabledButton
           ]}
           onPress={toggleFavorite}
-          disabled={loading}
+          disabled={processingFavorite}
         >
-          {loading ? (
+          {processingFavorite ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <>
@@ -300,6 +329,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  disabledButton: {
+    opacity: 0.6,
   },
   detailsContainer: {
     padding: 20,
@@ -402,6 +434,26 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginLeft: 10,
   },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    alignItems: 'center',
+    elevation: 5,
+    width: '80%',
+  },
+  modalText: {
+    marginTop: 15,
+    fontSize: 16,
+    textAlign: 'center',
+    color: '#333',
+  }
 });
 
 export default AnimeDetails; 

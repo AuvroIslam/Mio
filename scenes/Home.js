@@ -8,7 +8,8 @@ import {
   FlatList,
   Image,
   ActivityIndicator,
-  Alert
+  Alert,
+  Modal
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
@@ -19,7 +20,19 @@ const Home = ({ navigation }) => {
   const [animeResults, setAnimeResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const { currentUser } = useAuth();
-  const { favorites, isInFavorites, addToFavorites, removeFromFavorites } = useFavorites();
+  const { 
+    favorites, 
+    isInFavorites, 
+    addToFavorites, 
+    removeFromFavorites,
+    weeklyChangesCount,
+    maxWeeklyChanges,
+    maxFavorites,
+    processingFavorite
+  } = useFavorites();
+
+  // State to track which anime is being processed
+  const [processingAnime, setProcessingAnime] = useState(null);
 
   // Load seasonal anime on component mount
   useEffect(() => {
@@ -38,6 +51,20 @@ const Home = ({ navigation }) => {
       );
     }
   }, [favorites]);
+
+  // Render a small usage indicator 
+  const renderUsageIndicator = () => {
+    return (
+      <View style={styles.usageIndicator}>
+        <Text style={styles.usageText}>
+          Favorites: {favorites.length}/{maxFavorites}
+        </Text>
+        <Text style={styles.usageText}>
+          Weekly Removals: {weeklyChangesCount}/{maxWeeklyChanges}
+        </Text>
+      </View>
+    );
+  };
 
   const loadSeasonalAnime = async () => {
     try {
@@ -126,34 +153,55 @@ const Home = ({ navigation }) => {
       return;
     }
     
+    // If already processing a favorite operation, don't allow another one
+    if (processingFavorite) {
+      return;
+    }
+    
     try {
+      // Set the anime being processed
+      setProcessingAnime(anime);
+      
       const isFavorite = isInFavorites(anime.mal_id);
+      let success = false;
       
       if (isFavorite) {
-        await removeFromFavorites(anime.mal_id);
-        Alert.alert('Success', 'Removed from favorites');
+        // Remove from favorites
+        success = await removeFromFavorites(anime.mal_id);
+        if (success) {
+          Alert.alert('Success', 'Removed from favorites');
+        }
       } else {
-        await addToFavorites(anime);
-        Alert.alert('Success', 'Added to favorites');
+        // Add to favorites
+        success = await addToFavorites(anime);
+        if (success) {
+          Alert.alert('Success', 'Added to favorites');
+        }
       }
       
-      // Update UI immediately
-      setAnimeResults(prev => 
-        prev.map(item => 
-          item.mal_id === anime.mal_id 
-            ? { ...item, isFavorite: !isFavorite } 
-            : item
-        )
-      );
+      // Only update UI if operation was successful
+      if (success) {
+        setAnimeResults(prev => 
+          prev.map(item => 
+            item.mal_id === anime.mal_id 
+              ? { ...item, isFavorite: !isFavorite } 
+              : item
+          )
+        );
+      }
     } catch (error) {
       console.error('Error toggling favorite:', error);
       Alert.alert('Error', 'Failed to update favorites');
+    } finally {
+      // Clear the processing anime
+      setProcessingAnime(null);
     }
   };
 
   const renderAnimeItem = ({ item }) => {
-    // Check if anime is in favorites using the context
-    const isFavorite = item.isFavorite || isInFavorites(item.mal_id);
+    // Always use the context's isInFavorites function for the most accurate state
+    const isFavorite = isInFavorites(item.mal_id);
+    const isProcessing = processingFavorite && processingAnime?.mal_id === item.mal_id;
     
     return (
       <TouchableOpacity 
@@ -174,25 +222,46 @@ const Home = ({ navigation }) => {
           <View style={styles.actionRow}>
             {isFavorite ? (
               <TouchableOpacity 
-                style={[styles.favoriteButton, styles.favoriteButtonActive]}
+                style={[
+                  styles.favoriteButton, 
+                  styles.favoriteButtonActive,
+                  processingFavorite && styles.disabledButton
+                ]}
                 onPress={(e) => {
                   e.stopPropagation();
                   toggleFavorite(item);
                 }}
+                disabled={processingFavorite}
               >
-                <Ionicons name="heart-dislike" size={16} color="#fff" />
-                <Text style={styles.favoriteButtonText}>Remove</Text>
+                {isProcessing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="heart-dislike" size={16} color="#fff" />
+                    <Text style={styles.favoriteButtonText}>Remove</Text>
+                  </>
+                )}
               </TouchableOpacity>
             ) : (
               <TouchableOpacity 
-                style={styles.favoriteButton}
+                style={[
+                  styles.favoriteButton,
+                  processingFavorite && styles.disabledButton
+                ]}
                 onPress={(e) => {
                   e.stopPropagation();
                   toggleFavorite(item);
                 }}
+                disabled={processingFavorite}
               >
-                <Ionicons name="heart" size={16} color="#fff" />
-                <Text style={styles.favoriteButtonText}>Add</Text>
+                {isProcessing ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="heart" size={16} color="#fff" />
+                    <Text style={styles.favoriteButtonText}>Add</Text>
+                  </>
+                )}
               </TouchableOpacity>
             )}
           </View>
@@ -217,8 +286,36 @@ const Home = ({ navigation }) => {
     </View>
   );
 
+  // Loading modal component
+  const renderLoadingModal = () => {
+    if (!processingFavorite || !processingAnime) return null;
+    
+    const isFavorite = isInFavorites(processingAnime.mal_id);
+    
+    return (
+      <Modal
+        transparent={true}
+        animationType="fade"
+        visible={processingFavorite}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <ActivityIndicator size="large" color="#007bff" />
+            <Text style={styles.modalText}>
+              {isFavorite ? 'Adding to favorites...' : 'Removing from favorites...'}
+            </Text>
+            <Text style={styles.modalAnimeTitle}>{processingAnime.title}</Text>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
   return (
     <View style={styles.container}>
+      {renderLoadingModal()}
+      
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
@@ -232,6 +329,8 @@ const Home = ({ navigation }) => {
           <Ionicons name="search" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
+      
+      {renderUsageIndicator()}
       
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -392,6 +491,51 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
     marginLeft: 4,
+  },
+  usageIndicator: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 10,
+    marginBottom: 10,
+    backgroundColor: '#f0f8ff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cce5ff',
+  },
+  usageText: {
+    fontSize: 14,
+    color: '#0056b3',
+    fontWeight: '500',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    alignItems: 'center',
+    elevation: 5,
+    width: '80%',
+  },
+  modalText: {
+    marginTop: 15,
+    fontSize: 16,
+    textAlign: 'center',
+    color: '#333',
+  },
+  modalAnimeTitle: {
+    marginTop: 5,
+    fontSize: 14,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#007bff',
+  },
+  disabledButton: {
+    opacity: 0.6,
   },
 });
 

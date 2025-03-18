@@ -1,115 +1,169 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Alert } from 'react-native';
 import { useAuth } from './AuthContext';
+import { useSubscription } from './SubscriptionContext';
 import firestoreService from '../services/firestoreService';
 
-// Create a context for favorites management
+// Create the Favorites Context
 const FavoritesContext = createContext();
 
-// Custom hook to access the favorites context
-export const useFavorites = () => useContext(FavoritesContext);
+// Custom hook to use the favorites context
+export const useFavorites = () => {
+  return useContext(FavoritesContext);
+};
 
-// Provider component that wraps the app and provides favorites functionality
+// Provider component to wrap our app and provide favorites context
 export const FavoritesProvider = ({ children }) => {
   const [favorites, setFavorites] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  // Track weekly changes directly in this context
+  const [weeklyChangesCount, setWeeklyChangesCount] = useState(0);
+  // Track if any favorite operation is in progress
+  const [processingFavorite, setProcessingFavorite] = useState(false);
   const { currentUser } = useAuth();
+  
+  // Use the subscription context for limits and premium status
+  const { isPremium, LIMITS, resetFavoritesCount } = useSubscription();
 
-  // Load favorites when the user changes
+  // Max counts based on subscription
+  const maxFavorites = isPremium ? LIMITS.PREMIUM.MAX_FAVORITES : LIMITS.FREE.MAX_FAVORITES;
+  const maxWeeklyChanges = isPremium ? Infinity : LIMITS.FREE.MAX_CHANGES_PER_WEEK;
+
+  // Load favorites and change count when user changes
   useEffect(() => {
-    if (currentUser) {
-      loadFavorites();
-    } else {
-      setFavorites([]);
-    }
+    loadFavoritesAndCounts();
   }, [currentUser]);
 
-  // Function to ensure an anime has a clientKey
-  const ensureClientKey = (anime) => {
-    if (!anime) return null;
-    if (anime.clientKey) return anime;
-    
-    return {
-      ...anime,
-      clientKey: `anime_${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
-    };
-  };
+  // Keep subscription context updated with our local state
+  useEffect(() => {
+    if (currentUser) {
+      resetFavoritesCount(favorites.length);
+    }
+  }, [favorites, currentUser]);
 
-  // Function to load favorites from Firestore
-  const loadFavorites = async () => {
-    if (!currentUser) return;
-    
+  // Function to load favorites and weekly change counts from Firestore
+  const loadFavoritesAndCounts = async () => {
+    if (!currentUser) {
+      setFavorites([]);
+      setWeeklyChangesCount(0);
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
+      
+      // Load favorites
       const userFavorites = await firestoreService.getUserFavorites(currentUser.uid);
       
-      // Create a map of anime by ID to ensure unique entries
-      const uniqueFavorites = userFavorites.reduce((acc, anime) => {
-        // Add a unique clientKey for React rendering
-        const animeWithClientKey = ensureClientKey(anime);
-        acc.set(anime.mal_id.toString(), animeWithClientKey);
-        return acc;
-      }, new Map());
+      // Load subscription data to get weekly changes
+      const subscriptionData = await firestoreService.getUserSubscription(currentUser.uid);
       
-      // Convert back to array
-      setFavorites(Array.from(uniqueFavorites.values()));
+      if (userFavorites && userFavorites.length > 0) {
+        // Create a unique clientKey for each anime for React's key prop
+        const favoritesWithClientKey = userFavorites.map(anime => ({
+          ...anime,
+          clientKey: `${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2,11)}`
+        }));
+        
+        setFavorites(favoritesWithClientKey);
+      } else {
+        setFavorites([]);
+      }
+      
+      // Set weekly changes count
+      let changesThisWeek = 0;
+      if (subscriptionData && subscriptionData.success && subscriptionData.data) {
+        changesThisWeek = subscriptionData.data.changesThisWeek || 0;
+        setWeeklyChangesCount(changesThisWeek);
+      } else {
+        setWeeklyChangesCount(0);
+      }
+      
+      console.log(`Loaded data: ${userFavorites?.length || 0} favorites, ${changesThisWeek}/${maxWeeklyChanges} weekly changes used`);
     } catch (error) {
-      console.error('Error loading favorites:', error);
+      console.error('Error loading favorites and counts:', error);
+      setFavorites([]);
+      setWeeklyChangesCount(0);
     } finally {
       setLoading(false);
     }
   };
+  
+  // Function to update weekly changes count in both local state and Firestore
+  const updateWeeklyChangesCount = async (newCount) => {
+    setWeeklyChangesCount(newCount);
+    if (currentUser) {
+      try {
+        await firestoreService.updateUserSubscription(currentUser.uid, {
+          changesThisWeek: newCount
+        });
+      } catch (error) {
+        console.error('Error updating weekly changes count:', error);
+      }
+    }
+  };
 
-  // Function to check if an anime is in favorites
+  // Function to check if an anime is already in favorites
   const isInFavorites = (animeId) => {
-    if (!animeId) return false;
-    const animeIdStr = animeId.toString();
-    return favorites.some(fav => 
-      fav.mal_id.toString() === animeIdStr
-    );
+    return favorites.some(favorite => favorite.mal_id === animeId);
   };
 
   // Function to add an anime to favorites
   const addToFavorites = async (anime) => {
     if (!currentUser) {
       Alert.alert('Login Required', 'Please login to add favorites');
-      return { success: false };
+      return false;
     }
-    
+
+    // Check if already in favorites
+    if (isInFavorites(anime.mal_id)) {
+      Alert.alert('Already Added', 'This anime is already in your favorites');
+      return false;
+    }
+
+    // Check if we've reached the favorites limit
+    if (favorites.length >= maxFavorites) {
+      Alert.alert(
+        'Favorites Limit Reached', 
+        `You can have up to ${maxFavorites} favorites with your current plan.${!isPremium ? ' Upgrade to premium for more!' : ''}`
+      );
+      return false;
+    }
+
+    // If already processing, don't allow another operation
+    if (processingFavorite) {
+      return false;
+    }
+
+    // Adding anime is always free, we don't count it against the weekly changes
     try {
-      setLoading(true);
+      setProcessingFavorite(true);
       
-      // Check if already in favorites to prevent duplicates
-      if (isInFavorites(anime.mal_id)) {
-        return { success: true, message: 'Already in favorites' };
-      }
+      // Add a unique clientKey for React
+      const animeWithClientKey = {
+        ...anime,
+        clientKey: `${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2,11)}`
+      };
       
-      const result = await firestoreService.addFavorite(currentUser.uid, anime);
+      // First update the state optimistically
+      const updatedFavorites = [...favorites, animeWithClientKey];
+      setFavorites(updatedFavorites);
       
-      if (result.success) {
-        // Add a unique clientKey for React rendering
-        const animeWithClientKey = ensureClientKey(anime);
-        
-        // Update local state with the new favorite
-        setFavorites(prevFavorites => {
-          // Filter out any existing entries with the same mal_id (just to be sure)
-          const filteredFavorites = prevFavorites.filter(
-            fav => fav.mal_id.toString() !== anime.mal_id.toString()
-          );
-          
-          // Add the new anime with its unique clientKey
-          return [...filteredFavorites, animeWithClientKey];
-        });
-        
-        return { success: true, message: 'Added to favorites' };
-      } else {
-        throw new Error(result.error || 'Failed to add to favorites');
-      }
+      // Then save to Firestore
+      await firestoreService.addFavorite(currentUser.uid, anime);
+      
+      return true;
     } catch (error) {
       console.error('Error adding to favorites:', error);
-      return { success: false, error: error.message };
+      
+      // Rollback the state change if the operation failed
+      setFavorites(favorites);
+      
+      Alert.alert('Error', 'Failed to add to favorites');
+      return false;
     } finally {
-      setLoading(false);
+      setProcessingFavorite(false);
     }
   };
 
@@ -117,47 +171,72 @@ export const FavoritesProvider = ({ children }) => {
   const removeFromFavorites = async (animeId) => {
     if (!currentUser) {
       Alert.alert('Login Required', 'Please login to manage favorites');
-      return { success: false };
+      return false;
     }
-    
-    try {
-      setLoading(true);
-      
-      // First update the local state for immediate UI feedback
-      setFavorites(prevFavorites => 
-        prevFavorites.filter(fav => fav.mal_id.toString() !== animeId.toString())
+
+    // Check if already in favorites
+    if (!isInFavorites(animeId)) {
+      Alert.alert('Not in Favorites', 'This anime is not in your favorites');
+      return false;
+    }
+
+    // Check weekly changes limit for free users - strict check against the limit
+    // Free users can make exactly maxWeeklyChanges removals per week
+    if (!isPremium && weeklyChangesCount >= maxWeeklyChanges) {
+      Alert.alert(
+        'Weekly Changes Limit Reached',
+        `Free users can only remove ${maxWeeklyChanges} anime from their favorites per week. Upgrade to premium for unlimited changes!`
       );
+      return false;
+    }
+
+    // If already processing, don't allow another operation
+    if (processingFavorite) {
+      return false;
+    }
+
+    try {
+      setProcessingFavorite(true);
       
-      // Then update the database
+      // First update the state optimistically
+      const updatedFavorites = favorites.filter(favorite => favorite.mal_id !== animeId);
+      setFavorites(updatedFavorites);
+      
+      // Then remove from Firestore
       await firestoreService.removeAnimeFromFavorites(currentUser.uid, animeId);
       
-      return { success: true, message: 'Removed from favorites' };
+      // Update weekly changes count
+      const newWeeklyCount = weeklyChangesCount + 1;
+      await updateWeeklyChangesCount(newWeeklyCount);
+      
+      // Log to console for debugging
+      console.log(`Removed anime. Weekly changes count: ${newWeeklyCount}/${maxWeeklyChanges}`);
+      
+      return true;
     } catch (error) {
       console.error('Error removing from favorites:', error);
       
-      // If there was an error, reload favorites to ensure UI is in sync
-      loadFavorites();
+      // Rollback the state change if the operation failed
+      setFavorites(favorites);
       
-      return { success: false, error: error.message };
+      Alert.alert('Error', 'Failed to remove from favorites');
+      return false;
     } finally {
-      setLoading(false);
+      setProcessingFavorite(false);
     }
   };
 
-  // Check if an anime is in favorites (for UI indicators)
-  const checkFavoriteStatus = (animeId) => {
-    return isInFavorites(animeId);
-  };
-
-  // Context value with all the favorites functionality
+  // Create context value object
   const value = {
     favorites,
     loading,
-    loadFavorites,
+    isInFavorites,
     addToFavorites,
     removeFromFavorites,
-    checkFavoriteStatus,
-    isInFavorites
+    weeklyChangesCount,
+    maxFavorites,
+    maxWeeklyChanges,
+    processingFavorite
   };
 
   return (

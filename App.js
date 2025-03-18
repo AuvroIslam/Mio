@@ -6,6 +6,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { AuthProvider, useAuth } from './config/AuthContext';
 import { FavoritesProvider } from './config/FavoritesContext';
+import { SubscriptionProvider } from './config/SubscriptionContext';
 import firestoreService from './services/firestoreService';
 import Login from './scenes/login';
 import Signup from './scenes/signup';
@@ -135,13 +136,15 @@ const loadingStyles = StyleSheet.create({
   },
 });
 
-// Main App component with AuthProvider
+// Main App component with providers
 export default function App() {
   return (
     <AuthProvider>
-      <FavoritesProvider>
-        <RootNavigator />
-      </FavoritesProvider>
+      <SubscriptionProvider>
+        <FavoritesProvider>
+          <RootNavigator />
+        </FavoritesProvider>
+      </SubscriptionProvider>
     </AuthProvider>
   );
 }
