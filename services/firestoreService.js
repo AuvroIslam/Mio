@@ -170,22 +170,22 @@ const firestoreService = {
       });
       
       // Update the AnimeUsers collection 
-      const animeUserRef = doc(db, 'animeUsers', animeId);
-      const animeUserDoc = await getDoc(animeUserRef);
-      
-      if (animeUserDoc.exists()) {
-        const animeData = animeUserDoc.data();
+        const animeUserRef = doc(db, 'animeUsers', animeId);
+        const animeUserDoc = await getDoc(animeUserRef);
         
-        // Filter out this user
-        const updatedUsers = animeData.users.filter(id => id !== userId);
-        
-        if (updatedUsers.length > 0) {
-          // Update the document with the new users array
+        if (animeUserDoc.exists()) {
+          const animeData = animeUserDoc.data();
+          
+          // Filter out this user
+          const updatedUsers = animeData.users.filter(id => id !== userId);
+          
+          if (updatedUsers.length > 0) {
+            // Update the document with the new users array
           batch.update(animeUserRef, {
-            users: updatedUsers,
+              users: updatedUsers,
             updatedAt: Timestamp.now()
-          });
-        } else {
+            });
+          } else {
           // If no users left, delete the document
           batch.delete(animeUserRef);
         }
@@ -266,6 +266,12 @@ const firestoreService = {
         return { success: true, matches: [] };
       }
       
+      // Get user's gender preferences and location preferences
+      const userGender = userData.gender || '';
+      const userMatchGender = userData.matchGender || 'everyone';
+      const userLocation = userData.location || '';
+      const userMatchLocation = userData.matchLocation || 'worldwide';
+      
       // Using a Map to count matches
       const potentialMatches = new Map();
       
@@ -285,11 +291,11 @@ const firestoreService = {
             const otherUsers = animeData.users || [];
             
             // Count each user who also likes this anime
-            otherUsers.forEach(otherUserId => {
+            for (const otherUserId of otherUsers) {
               if (otherUserId !== userId) {
                 potentialMatches.set(otherUserId, (potentialMatches.get(otherUserId) || 0) + 1);
               }
-            });
+            }
           }
         }
       }
@@ -298,6 +304,7 @@ const firestoreService = {
       const matches = [];
       const matchesData = {};
       
+      // Process potential matches to check gender and location compatibility
       for (const [matchUserId, count] of potentialMatches.entries()) {
         if (count >= MATCH_THRESHOLD) {
           // Get this user's profile details
@@ -305,12 +312,99 @@ const firestoreService = {
           
           if (matchUserDoc.exists()) {
             const matchUserData = matchUserDoc.data();
-            matches.push(matchUserId);
-            matchesData[matchUserId] = {
-              userName: matchUserData.userName || 'User',
-              photoURL: matchUserData.photoURL || '',
-              matchCount: count
-            };
+            const matchUserGender = matchUserData.gender || '';
+            const matchUserMatchGender = matchUserData.matchGender || 'everyone';
+            const matchUserLocation = matchUserData.location || '';
+            const matchUserMatchLocation = matchUserData.matchLocation || 'worldwide';
+            
+            // Check gender compatibility
+            let genderCompatible = false;
+            
+            // 1. If current user is male
+            if (userGender === 'male') {
+              // User wants to match with females
+              if (userMatchGender === 'female') {
+                // Only match with females who want to match with males or everyone
+                genderCompatible = matchUserGender === 'female' && 
+                  (matchUserMatchGender === 'male' || matchUserMatchGender === 'everyone');
+              } 
+              // User wants to match with males
+              else if (userMatchGender === 'male') {
+                // Only match with males who want to match with males or everyone
+                genderCompatible = matchUserGender === 'male' && 
+                  (matchUserMatchGender === 'male' || matchUserMatchGender === 'everyone');
+              }
+              // User wants to match with everyone
+              else if (userMatchGender === 'everyone') {
+                // Match with females who want to match with males or everyone
+                // OR match with males who want to match with males or everyone
+                genderCompatible = (matchUserGender === 'female' && 
+                  (matchUserMatchGender === 'male' || matchUserMatchGender === 'everyone')) ||
+                  (matchUserGender === 'male' && 
+                  (matchUserMatchGender === 'male' || matchUserMatchGender === 'everyone'));
+              }
+            }
+            // 2. If current user is female
+            else if (userGender === 'female') {
+              // User wants to match with males
+              if (userMatchGender === 'male') {
+                // Only match with males who want to match with females or everyone
+                genderCompatible = matchUserGender === 'male' && 
+                  (matchUserMatchGender === 'female' || matchUserMatchGender === 'everyone');
+              } 
+              // User wants to match with females
+              else if (userMatchGender === 'female') {
+                // Only match with females who want to match with females or everyone
+                genderCompatible = matchUserGender === 'female' && 
+                  (matchUserMatchGender === 'female' || matchUserMatchGender === 'everyone');
+              }
+              // User wants to match with everyone
+              else if (userMatchGender === 'everyone') {
+                // Match with males who want to match with females or everyone
+                // OR match with females who want to match with females or everyone
+                genderCompatible = (matchUserGender === 'male' && 
+                  (matchUserMatchGender === 'female' || matchUserMatchGender === 'everyone')) ||
+                  (matchUserGender === 'female' && 
+                  (matchUserMatchGender === 'female' || matchUserMatchGender === 'everyone'));
+              }
+            }
+            
+            // Check location compatibility
+            let locationCompatible = false;
+            
+            // Location compatibility needs to be checked from BOTH perspectives:
+            // 1. From current user's perspective
+            let userLocationPermits = false;
+            if (userMatchLocation === 'local') {
+              // User wants local matches only - must be in same country
+              userLocationPermits = userLocation === matchUserLocation && userLocation !== '';
+            } else if (userMatchLocation === 'worldwide') {
+              // User is fine with worldwide matches
+              userLocationPermits = true;
+            }
+            
+            // 2. From match user's perspective
+            let matchLocationPermits = false;
+            if (matchUserMatchLocation === 'local') {
+              // Match wants local matches only - must be in same country
+              matchLocationPermits = matchUserLocation === userLocation && matchUserLocation !== '';
+            } else if (matchUserMatchLocation === 'worldwide') {
+              // Match is fine with worldwide matches
+              matchLocationPermits = true;
+            }
+            
+            // Both users must permit this match based on their location preferences
+            locationCompatible = userLocationPermits && matchLocationPermits;
+            
+            // If both gender and location are compatible, add to matches
+            if (genderCompatible && locationCompatible) {
+              matches.push(matchUserId);
+              matchesData[matchUserId] = {
+                userName: matchUserData.userName || 'User',
+                photoURL: matchUserData.photoURL || '',
+                matchCount: count
+              };
+            }
           }
         }
       }
@@ -374,11 +468,24 @@ const firestoreService = {
         for (const matchId of userData.matches) {
           const matchData = userData.matchesData[matchId];
           if (matchData) {
+            // Get additional user data for display
+            const matchUserDoc = await getDoc(doc(db, 'users', matchId));
+            let gender = '';
+            let location = '';
+            
+            if (matchUserDoc.exists()) {
+              const matchUserData = matchUserDoc.data();
+              gender = matchUserData.gender || '';
+              location = matchUserData.location || '';
+            }
+            
             matches.push({
               userId: matchId,
               userName: matchData.userName || 'User',
               photoURL: matchData.photoURL || '',
-              matches: matchData.matchCount || 0
+              matches: matchData.matchCount || 0,
+              gender: gender,
+              location: location
             });
           }
         }
@@ -493,7 +600,7 @@ const firestoreService = {
       return { success: false, error: error.message };
     }
   },
-
+  
   /**
    * Uploads a photo to Cloudinary and updates profile
    * @param {string} uri - The local URI of the image
@@ -556,7 +663,7 @@ const firestoreService = {
       return { success: false, error: error.message };
     }
   },
-  
+
   /**
    * Deletes a photo from Cloudinary and updates profile
    * @param {string} userId - The user ID

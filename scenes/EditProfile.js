@@ -27,30 +27,6 @@ const EDUCATION_OPTIONS = [
   'Other'
 ];
 
-// Full list of world countries for dropdown
-const COUNTRIES = [
-  'Afghanistan', 'Albania', 'Algeria', 'Andorra', 'Angola', 'Antigua and Barbuda', 'Argentina', 'Armenia', 'Australia', 'Austria', 
-  'Azerbaijan', 'Bahamas', 'Bahrain', 'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize', 'Benin', 'Bhutan', 
-  'Bolivia', 'Bosnia and Herzegovina', 'Botswana', 'Brazil', 'Brunei', 'Bulgaria', 'Burkina Faso', 'Burundi', 'Cabo Verde', 'Cambodia', 
-  'Cameroon', 'Canada', 'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia', 'Comoros', 'Congo', 'Costa Rica', 
-  'Croatia', 'Cuba', 'Cyprus', 'Czech Republic', 'Denmark', 'Djibouti', 'Dominica', 'Dominican Republic', 'Ecuador', 'Egypt', 
-  'El Salvador', 'Equatorial Guinea', 'Eritrea', 'Estonia', 'Eswatini', 'Ethiopia', 'Fiji', 'Finland', 'France', 'Gabon', 
-  'Gambia', 'Georgia', 'Germany', 'Ghana', 'Greece', 'Grenada', 'Guatemala', 'Guinea', 'Guinea-Bissau', 'Guyana', 
-  'Haiti', 'Honduras', 'Hungary', 'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 
-  'Italy', 'Jamaica', 'Japan', 'Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Korea, North', 'Korea, South', 'Kosovo', 
-  'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia', 'Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein', 'Lithuania', 
-  'Luxembourg', 'Madagascar', 'Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta', 'Marshall Islands', 'Mauritania', 'Mauritius', 
-  'Mexico', 'Micronesia', 'Moldova', 'Monaco', 'Mongolia', 'Montenegro', 'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 
-  'Nauru', 'Nepal', 'Netherlands', 'New Zealand', 'Nicaragua', 'Niger', 'Nigeria', 'North Macedonia', 'Norway', 'Oman', 
-  'Pakistan', 'Palau', 'Palestine', 'Panama', 'Papua New Guinea', 'Paraguay', 'Peru', 'Philippines', 'Poland', 'Portugal', 
-  'Qatar', 'Romania', 'Russia', 'Rwanda', 'Saint Kitts and Nevis', 'Saint Lucia', 'Saint Vincent and the Grenadines', 'Samoa', 'San Marino', 'Sao Tome and Principe', 
-  'Saudi Arabia', 'Senegal', 'Serbia', 'Seychelles', 'Sierra Leone', 'Singapore', 'Slovakia', 'Slovenia', 'Solomon Islands', 'Somalia', 
-  'South Africa', 'South Sudan', 'Spain', 'Sri Lanka', 'Sudan', 'Suriname', 'Sweden', 'Switzerland', 'Syria', 'Taiwan', 
-  'Tajikistan', 'Tanzania', 'Thailand', 'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey', 'Turkmenistan', 
-  'Tuvalu', 'Uganda', 'Ukraine', 'United Arab Emirates', 'United Kingdom', 'United States', 'Uruguay', 'Uzbekistan', 
-  'Vanuatu', 'Vatican City', 'Venezuela', 'Vietnam', 'Yemen', 'Zambia', 'Zimbabwe'
-];
-
 const EditProfile = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [gender, setGender] = useState('');
@@ -59,15 +35,15 @@ const EditProfile = ({ navigation }) => {
   const [bio, setBio] = useState('');
   const [location, setLocation] = useState('');
   const [showEducationOptions, setShowEducationOptions] = useState(false);
-  const [showLocationOptions, setShowLocationOptions] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [tempPhoto, setTempPhoto] = useState(null);
   const [photoIndex, setPhotoIndex] = useState(0);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [matchGender, setMatchGender] = useState('everyone');
   const [matchLocation, setMatchLocation] = useState('worldwide');
-  const [locationFilter, setLocationFilter] = useState('');
-  const [filteredLocations, setFilteredLocations] = useState(COUNTRIES);
+  const [hotTake, setHotTake] = useState('');
+  const [underratedAnime, setUnderratedAnime] = useState('');
+  const [favoriteBand, setFavoriteBand] = useState('');
   
   const { currentUser } = useAuth();
   
@@ -77,18 +53,6 @@ const EditProfile = ({ navigation }) => {
       loadUserProfile();
     }
   }, [currentUser]);
-  
-  // Effect to filter locations based on search
-  useEffect(() => {
-    if (locationFilter) {
-      const filtered = COUNTRIES.filter(country => 
-        country.toLowerCase().includes(locationFilter.toLowerCase())
-      );
-      setFilteredLocations(filtered);
-    } else {
-      setFilteredLocations(COUNTRIES);
-    }
-  }, [locationFilter]);
   
   const loadUserProfile = async () => {
     if (!currentUser) return;
@@ -113,6 +77,9 @@ const EditProfile = ({ navigation }) => {
       setPhotos(userData.photos || []);
       setMatchGender(userData.matchGender || 'everyone');
       setMatchLocation(userData.matchLocation || 'worldwide');
+      setHotTake(userData.hotTake || '');
+      setUnderratedAnime(userData.underratedAnime || '');
+      setFavoriteBand(userData.favoriteBand || '');
     } catch (error) {
       console.error('Error loading profile:', error);
       Alert.alert('Error', 'Failed to load profile: ' + error.message);
@@ -241,13 +208,14 @@ const EditProfile = ({ navigation }) => {
       
       // Update profile in Firestore
       const updates = {
-        gender,
         age: ageValue,
         education,
         bio,
-        location,
         matchGender,
-        matchLocation
+        matchLocation,
+        hotTake,
+        underratedAnime,
+        favoriteBand
       };
       
       const result = await firestoreService.updateUserProfile(currentUser.uid, updates);
@@ -255,6 +223,9 @@ const EditProfile = ({ navigation }) => {
       if (!result.success) {
         throw new Error(result.error || 'Failed to update profile');
       }
+      
+      // Call updateBidirectionalMatches to refresh matches after profile update
+      await firestoreService.updateBidirectionalMatches(currentUser.uid);
       
       Alert.alert('Success', 'Profile updated successfully');
       
@@ -315,23 +286,11 @@ const EditProfile = ({ navigation }) => {
       
       <View style={styles.inputGroup}>
         <Text style={styles.label}>Gender</Text>
-        <View style={styles.radioContainer}>
-          <TouchableOpacity 
-            style={[styles.radioButton, gender === 'male' && styles.radioSelected]}
-            onPress={() => setGender('male')}
-          >
-            <Text style={[styles.radioText, gender === 'male' && styles.radioTextSelected]}>
-              Male
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.radioButton, gender === 'female' && styles.radioSelected]}
-            onPress={() => setGender('female')}
-          >
-            <Text style={[styles.radioText, gender === 'female' && styles.radioTextSelected]}>
-              Female
-            </Text>
-          </TouchableOpacity>
+        <View style={styles.staticField}>
+          <Text style={styles.staticFieldText}>
+            {gender === 'male' ? 'Male' : gender === 'female' ? 'Female' : 'Not specified'}
+          </Text>
+          <Text style={styles.staticFieldNote}>(Cannot be changed)</Text>
         </View>
       </View>
       
@@ -362,15 +321,12 @@ const EditProfile = ({ navigation }) => {
       
       <View style={styles.inputGroup}>
         <Text style={styles.label}>Location</Text>
-        <TouchableOpacity
-          style={styles.pickerButton}
-          onPress={() => setShowLocationOptions(true)}
-        >
-          <Text style={location ? styles.pickerText : styles.pickerPlaceholder}>
-            {location || 'Select your location'}
+        <View style={styles.staticField}>
+          <Text style={styles.staticFieldText}>
+            {location || 'Not specified'}
           </Text>
-          <Ionicons name="location" size={24} color="#007bff" />
-        </TouchableOpacity>
+          <Text style={styles.staticFieldNote}>(Cannot be changed)</Text>
+        </View>
       </View>
       
       <View style={styles.inputGroup}>
@@ -384,6 +340,38 @@ const EditProfile = ({ navigation }) => {
           maxLength={150}
         />
         <Text style={styles.charCount}>{bio.length}/150</Text>
+      </View>
+      
+      <View style={styles.inputGroup}>
+        <Text style={styles.label}>Your hot take about any anime</Text>
+        <TextInput
+          style={styles.bioInput}
+          placeholder="Share your controversial opinion..."
+          value={hotTake}
+          onChangeText={setHotTake}
+          multiline
+        />
+      </View>
+      
+      <View style={styles.inputGroup}>
+        <Text style={styles.label}>Your most underrated anime</Text>
+        <TextInput
+          style={styles.bioInput}
+          placeholder="What amazing anime are people missing out on?"
+          value={underratedAnime}
+          onChangeText={setUnderratedAnime}
+          multiline
+        />
+      </View>
+      
+      <View style={styles.inputGroup}>
+        <Text style={styles.label}>Favorite band or music artist</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Who do you love listening to?"
+          value={favoriteBand}
+          onChangeText={setFavoriteBand}
+        />
       </View>
       
       <Text style={styles.sectionTitle}>Match Preferences</Text>
@@ -483,54 +471,6 @@ const EditProfile = ({ navigation }) => {
             <TouchableOpacity
               style={styles.modalCloseButton}
               onPress={() => setShowEducationOptions(false)}
-            >
-              <Text style={styles.modalCloseText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-      
-      {/* Location Options Modal */}
-      <Modal
-        visible={showLocationOptions}
-        transparent={true}
-        animationType="slide"
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Location</Text>
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search countries..."
-              value={locationFilter}
-              onChangeText={setLocationFilter}
-            />
-            <ScrollView style={styles.optionsList}>
-              {filteredLocations.map((country, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.optionItem}
-                  onPress={() => {
-                    setLocation(country);
-                    setShowLocationOptions(false);
-                    setLocationFilter('');
-                  }}
-                >
-                  <Text style={[
-                    styles.optionText,
-                    location === country && styles.selectedOptionText
-                  ]}>
-                    {country}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => {
-                setShowLocationOptions(false);
-                setLocationFilter('');
-              }}
             >
               <Text style={styles.modalCloseText}>Cancel</Text>
             </TouchableOpacity>
@@ -683,6 +623,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     backgroundColor: 'white',
     fontSize: 16,
+  },
+  staticField: {
+    height: 50,
+    borderWidth: 1,
+    borderColor: '#ced4da',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#f8f9fa',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  staticFieldText: {
+    fontSize: 16,
+    color: '#495057',
+    flex: 1,
+  },
+  staticFieldNote: {
+    fontSize: 12,
+    color: '#6c757d',
+    fontStyle: 'italic',
   },
   radioContainer: {
     flexDirection: 'row',

@@ -177,6 +177,80 @@ const UserProfile = ({ route, navigation }) => {
     );
   };
 
+  const renderProfileDetails = () => {
+    if (!user) return null;
+    return (
+      <View style={styles.profileDetails}>
+        <View style={styles.infoRow}>
+          <Ionicons name="person" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Name:</Text>
+          <Text style={styles.infoValue}>{user.userName || 'User'}</Text>
+        </View>
+
+        {user.gender && (
+          <View style={styles.infoRow}>
+            <Ionicons name="transgender" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Gender:</Text>
+            <Text style={styles.infoValue}>{user.gender}</Text>
+          </View>
+        )}
+
+        {user.age && (
+          <View style={styles.infoRow}>
+            <Ionicons name="calendar" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Age:</Text>
+            <Text style={styles.infoValue}>{user.age}</Text>
+          </View>
+        )}
+
+        {user.education && (
+          <View style={styles.infoRow}>
+            <Ionicons name="school" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Education:</Text>
+            <Text style={styles.infoValue}>{user.education}</Text>
+          </View>
+        )}
+
+        {user.location && (
+          <View style={styles.infoRow}>
+            <Ionicons name="location" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Location:</Text>
+            <Text style={styles.infoValue}>{user.location}</Text>
+          </View>
+        )}
+
+        {user.animeHotTake && (
+          <View style={styles.infoRow}>
+            <Text style={styles.questionLabel}>Hot Take:</Text>
+            <Text style={styles.infoValue}>{user.animeHotTake}</Text>
+          </View>
+        )}
+
+        {user.underratedAnime && (
+          <View style={styles.infoRow}>
+            <Text style={styles.questionLabel}>Underrated Anime:</Text>
+            <Text style={styles.infoValue}>{user.underratedAnime}</Text>
+          </View>
+        )}
+
+        {user.favoriteBand && (
+          <View style={styles.infoRow}>
+            <Text style={styles.questionLabel}>Favorite Band:</Text>
+            <Text style={styles.infoValue}>{user.favoriteBand}</Text>
+          </View>
+        )}
+
+        {user.bio && (
+          <View style={styles.infoRow}>
+            <Ionicons name="book" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Bio:</Text>
+            <Text style={styles.infoValue}>{user.bio}</Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -197,7 +271,6 @@ const UserProfile = ({ route, navigation }) => {
             <View style={styles.userInfo}>
               <Ionicons name="person-circle" size={80} color="#007bff" />
               <Text style={styles.username}>{user?.userName || 'User'}</Text>
-              <Text style={styles.email}>{user?.email}</Text>
               <Text style={styles.favoriteCount}>
                 {userFavorites.length} Favorite{userFavorites.length !== 1 && 's'}
               </Text>
@@ -239,6 +312,10 @@ const UserProfile = ({ route, navigation }) => {
               <Text style={styles.sectionTitle}>Favorites</Text>
             </View>
           </View>
+          <View style={styles.profileCard}>
+            <Text style={styles.sectionTitle}>Profile Information</Text>
+            {renderProfileDetails()}
+          </View>
         </>
       }
       ListFooterComponent={<View style={styles.listFooter} />}
@@ -278,10 +355,6 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     marginTop: 10,
-  },
-  email: {
-    color: '#666',
-    marginBottom: 5,
   },
   favoriteCount: {
     color: '#666',
@@ -375,6 +448,43 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     color: '#999',
     marginTop: 20,
+    marginBottom: 20,
+  },
+  profileDetails: {
+    padding: 15,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    elevation: 2,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  infoIcon: {
+    marginRight: 10,
+  },
+  infoLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007bff',
+    width: 150,
+  },
+  infoValue: {
+    color: '#666',
+  },
+  questionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007bff',
+    marginRight: 5,
+    width: 150,
+  },
+  profileCard: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 15,
+    elevation: 2,
     marginBottom: 20,
   },
 });

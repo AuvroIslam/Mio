@@ -38,23 +38,25 @@ const Signup = ({ navigation }) => {
     
     try {
       setLoading(true);
+      console.log("Starting signup process");
       
       // Create user with Firebase Authentication
       const userCredential = await signup(email, password);
+      console.log("User account created");
       
       // Update display name
       await updateUserProfile({ displayName: name });
+      console.log("Display name updated");
       
-      // Create user profile in Firestore
+      // Create user profile in Firestore with minimal data
       await firestoreService.createUserProfile(
         userCredential.user.uid,
         name,
         email
       );
+      console.log("Basic profile created, redirecting to complete profile");
       
-      // Navigate to Home screen on successful signup
-      // The navigation back to the main app should happen in AuthContext
-      // after the user has been authenticated
+      // Navigation will happen automatically based on auth state and profile check
     }
     catch (error) {
       let errorMessage = 'Failed to create an account';
@@ -74,10 +76,12 @@ const Signup = ({ navigation }) => {
           errorMessage = error.message;
       }
       
+      console.error("Signup error:", error);
       Alert.alert('Signup Error', errorMessage);
-    } finally {
       setLoading(false);
     }
+    // Note: We don't set loading to false on success
+    // because we want to keep the loading state while the auth state changes
   };
 
   return (

@@ -16,6 +16,7 @@ import firestoreService from '../services/firestoreService';
 const Matched = ({ navigation }) => {
   const [matchedUsers, setMatchedUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [userData, setUserData] = useState(null);
   const { currentUser } = useAuth();
 
   useEffect(() => {
@@ -23,6 +24,12 @@ const Matched = ({ navigation }) => {
       if (currentUser) {
         setLoading(true);
         try {
+          // Get user profile data
+          const userProfile = await firestoreService.getUserProfile(currentUser.uid);
+          if (userProfile.success) {
+            setUserData(userProfile.data);
+          }
+          
           // Get matches from Firestore
           const matches = await firestoreService.getMatches(currentUser.uid);
           console.log("Fetched matches:", matches);
@@ -71,6 +78,18 @@ const Matched = ({ navigation }) => {
         <Text style={styles.matchInfo}>
           <Text style={styles.matchCount}>{item.matches}</Text> anime in common
         </Text>
+        {item.gender && (
+          <View style={styles.matchBadge}>
+            <Ionicons name="person" size={12} color="#fff" />
+            <Text style={styles.matchBadgeText}>{item.gender}</Text>
+          </View>
+        )}
+        {item.location && userData && userData.matchLocation === 'local' && (
+          <View style={styles.matchBadge}>
+            <Ionicons name="location" size={12} color="#fff" />
+            <Text style={styles.matchBadgeText}>{item.location}</Text>
+          </View>
+        )}
       </View>
       <TouchableOpacity 
         style={styles.viewButton}
@@ -81,10 +100,34 @@ const Matched = ({ navigation }) => {
     </TouchableOpacity>
   );
 
+  // Helper function to generate matching preferences text
+  const getMatchingPrefsText = () => {
+    if (!userData) return '';
+    
+    let genderText = '';
+    if (userData.matchGender === 'male') {
+      genderText = 'men';
+    } else if (userData.matchGender === 'female') {
+      genderText = 'women';
+    } else {
+      genderText = 'all genders';
+    }
+    
+    let locationText = userData.matchLocation === 'local' ? 'in your location' : 'worldwide';
+    
+    return `Showing matches with ${genderText} ${locationText}`;
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Fans with Similar Taste</Text>
       <Text style={styles.subtitle}>Connect with fans who like the same anime</Text>
+      
+      {userData && (
+        <View style={styles.preferencesContainer}>
+          <Text style={styles.preferencesText}>{getMatchingPrefsText()}</Text>
+        </View>
+      )}
       
       {loading ? (
         <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
@@ -101,7 +144,9 @@ const Matched = ({ navigation }) => {
                 No matches found yet
               </Text>
               <Text style={styles.emptySubtext}>
-                Add at least 3 favorites to find matches
+                {userData && userData.favorites && userData.favorites.length < 3 ? 
+                  'Add at least 3 favorites to find matches' :
+                  'Try adjusting your match preferences in your profile'}
               </Text>
             </View>
           }
@@ -126,7 +171,17 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 14,
     color: '#666',
-    marginBottom: 20,
+    marginBottom: 10,
+  },
+  preferencesContainer: {
+    backgroundColor: '#e3f2fd',
+    padding: 10,
+    borderRadius: 5,
+    marginBottom: 15,
+  },
+  preferencesText: {
+    fontSize: 14,
+    color: '#0d47a1',
   },
   usersList: {
     paddingBottom: 20,
@@ -163,10 +218,27 @@ const styles = StyleSheet.create({
   matchInfo: {
     fontSize: 14,
     color: '#666',
+    marginBottom: 8,
   },
   matchCount: {
     fontWeight: 'bold',
     color: '#007bff',
+  },
+  matchBadge: {
+    backgroundColor: '#007bff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    marginRight: 5,
+    marginBottom: 5,
+    alignSelf: 'flex-start',
+  },
+  matchBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    marginLeft: 4,
   },
   viewButton: {
     backgroundColor: '#007bff',

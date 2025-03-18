@@ -193,23 +193,56 @@ const Profile = ({ navigation }) => {
         )}
         
         {userData.bio && (
-          <View style={styles.bioContainer}>
-            <Text style={styles.bioLabel}>About Me:</Text>
-            <Text style={styles.bioText}>{userData.bio}</Text>
+          <View style={styles.infoRow}>
+            <Ionicons name="book" size={20} color="#007bff" style={styles.infoIcon} />
+            <Text style={styles.infoLabel}>Bio:</Text>
+            <Text style={styles.infoValue}>{userData.bio}</Text>
           </View>
         )}
-        
-        <View style={styles.infoRow}>
-          <Ionicons name="mail" size={20} color="#007bff" style={styles.infoIcon} />
-          <Text style={styles.infoLabel}>Email:</Text>
-          <Text style={styles.infoValue}>{currentUser?.email}</Text>
-        </View>
         
         <View style={styles.infoRow}>
           <Ionicons name="heart" size={20} color="#007bff" style={styles.infoIcon} />
           <Text style={styles.infoLabel}>Favorites:</Text>
           <Text style={styles.infoValue}>{favorites.length}</Text>
         </View>
+
+        <View style={styles.infoRow}>
+          <Ionicons name="people" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Match with:</Text>
+          <Text style={styles.infoValue}>
+            {userData.matchGender === 'male' ? 'Men' : 
+             userData.matchGender === 'female' ? 'Women' : 'Everyone'}
+          </Text>
+        </View>
+
+        <View style={styles.infoRow}>
+          <Ionicons name="globe" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Match location:</Text>
+          <Text style={styles.infoValue}>
+            {userData.matchLocation === 'local' ? 'Local only' : 'Worldwide'}
+          </Text>
+        </View>
+
+        {userData.animeHotTake && (
+          <View style={styles.infoRow}>
+            <Text style={styles.questionLabel}>Hot Take:</Text>
+            <Text style={styles.infoValue}>{userData.animeHotTake}</Text>
+          </View>
+        )}
+
+        {userData.underratedAnime && (
+          <View style={styles.infoRow}>
+            <Text style={styles.questionLabel}>Underrated Anime:</Text>
+            <Text style={styles.infoValue}>{userData.underratedAnime}</Text>
+          </View>
+        )}
+
+        {userData.favoriteBand && (
+          <View style={styles.infoRow}>
+            <Text style={styles.questionLabel}>Favorite Band:</Text>
+            <Text style={styles.infoValue}>{userData.favoriteBand}</Text>
+          </View>
+        )}
       </View>
     );
   };
@@ -399,20 +432,6 @@ const styles = StyleSheet.create({
     color: '#333',
     flex: 1,
   },
-  bioContainer: {
-    marginBottom: 15,
-  },
-  bioLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#555',
-    marginBottom: 5,
-  },
-  bioText: {
-    fontSize: 16,
-    color: '#333',
-    lineHeight: 22,
-  },
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
@@ -479,6 +498,13 @@ const styles = StyleSheet.create({
   },
   loader: {
     marginTop: 50,
+  },
+  questionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007bff',
+    marginRight: 5,
+    width: 150,
   },
 });
 
