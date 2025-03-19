@@ -14,30 +14,81 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import { useFavorites } from '../config/FavoritesContext';
+import { useSubscription } from '../config/SubscriptionContext';
 
 const Home = ({ navigation }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [animeResults, setAnimeResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [countdown, setCountdown] = useState('');
+  const [countdownInitialized, setCountdownInitialized] = useState(false);
   const { currentUser } = useAuth();
   const { 
     favorites, 
     isInFavorites, 
     addToFavorites, 
     removeFromFavorites,
-    weeklyChangesCount,
-    maxWeeklyChanges,
     maxFavorites,
     processingFavorite
   } = useFavorites();
+  const { 
+    canMakeChange, 
+    getFormattedTimeRemaining,
+    usageStats,
+    getRemainingCounts,
+    isInCooldown,
+    getWeeklyChangesCount,
+    LIMITS,
+    loading: subscriptionLoading
+  } = useSubscription();
+
+  // Get maxWeeklyChanges from LIMITS
+  const maxWeeklyChanges = usageStats.isPremium ? Infinity : LIMITS.FREE.MAX_CHANGES_PER_WEEK;
+  
+  // Get weekly changes count from context method
+  const weeklyChangesCount = getWeeklyChangesCount();
+
+  // Countdown timer effect
+  useEffect(() => {
+    let interval = null;
+    
+    if (subscriptionLoading) {
+      // Don't initialize the countdown yet if subscription is still loading
+      return;
+    }
+    
+    // Once subscription data is loaded, we can initialize the countdown
+    if (usageStats.counterStartedAt) {
+      // Mark as initialized first to prevent flicker
+      setCountdownInitialized(true);
+      
+      // Initialize countdown immediately
+      setCountdown(getFormattedTimeRemaining());
+      
+      // Start the countdown timer to update every second
+      interval = setInterval(() => {
+        setCountdown(getFormattedTimeRemaining());
+      }, 1000);
+    } else {
+      // No countdown needed, but we're still initialized
+      setCountdown('');
+      setCountdownInitialized(true);
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [usageStats.counterStartedAt, subscriptionLoading]);
 
   // State to track which anime is being processed
   const [processingAnime, setProcessingAnime] = useState(null);
 
   // Load seasonal anime on component mount
   useEffect(() => {
-    loadSeasonalAnime();
-  }, []);
+    if (countdownInitialized) {
+      loadSeasonalAnime();
+    }
+  }, [countdownInitialized]);
 
   // Update anime results with current favorite status when favorites change
   useEffect(() => {
@@ -52,16 +103,33 @@ const Home = ({ navigation }) => {
     }
   }, [favorites]);
 
+  // Add a useEffect to refresh UI when usageStats changes
+  useEffect(() => {
+    // This ensures the component re-renders when usageStats changes
+    // (especially after cooldown resets changesThisWeek to 0)
+    console.log('UsageStats updated:', usageStats.changesThisWeek, usageStats.counterStartedAt);
+    console.log('Is in cooldown?', isInCooldown());
+    console.log('Weekly changes count:', getWeeklyChangesCount());
+  }, [usageStats]);
+
   // Render a small usage indicator 
   const renderUsageIndicator = () => {
+    const cooldownActive = isInCooldown();
+    
     return (
       <View style={styles.usageIndicator}>
         <Text style={styles.usageText}>
           Favorites: {favorites.length}/{maxFavorites}
         </Text>
-        <Text style={styles.usageText}>
-          Weekly Removals: {weeklyChangesCount}/{maxWeeklyChanges}
-        </Text>
+        {cooldownActive ? (
+          <Text style={[styles.usageText, styles.lockedText]}>
+            Changes: Locked ({countdown} remaining)
+          </Text>
+        ) : (
+          <Text style={styles.usageText}>
+            Weekly Removals: {weeklyChangesCount}/{maxWeeklyChanges}
+          </Text>
+        )}
       </View>
     );
   };
@@ -166,6 +234,16 @@ const Home = ({ navigation }) => {
       let success = false;
       
       if (isFavorite) {
+        // Check if user can make changes (only for removals)
+        if (!canMakeChange()) {
+          Alert.alert(
+            'Weekly Limit Reached',
+            `You've used all your weekly changes. Please wait 2 minutes or upgrade to premium.`
+          );
+          setProcessingAnime(null);
+          return;
+        }
+        
         // Remove from favorites
         success = await removeFromFavorites(anime.mal_id);
         if (success) {
@@ -286,7 +364,19 @@ const Home = ({ navigation }) => {
     </View>
   );
 
-  // Loading modal component
+  // Main render function - show loading screen until initialized
+  if (subscriptionLoading || !countdownInitialized) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007bff" />
+        <Text style={styles.loadingText}>
+          Loading...
+        </Text>
+      </View>
+    );
+  }
+
+  // Loading modal component for favorite operations
   const renderLoadingModal = () => {
     if (!processingFavorite || !processingAnime) return null;
     
@@ -303,7 +393,7 @@ const Home = ({ navigation }) => {
           <View style={styles.modalContent}>
             <ActivityIndicator size="large" color="#007bff" />
             <Text style={styles.modalText}>
-              {isFavorite ? 'Adding to favorites...' : 'Removing from favorites...'}
+              {isFavorite ? 'Removing from favorites...' : 'Adding to favorites...'}
             </Text>
             <Text style={styles.modalAnimeTitle}>{processingAnime.title}</Text>
           </View>
@@ -506,6 +596,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#0056b3',
     fontWeight: '500',
+  },
+  lockedText: {
+    color: '#dc3545',
+    fontWeight: 'bold',
   },
   modalContainer: {
     flex: 1,

@@ -437,25 +437,6 @@ const styles = StyleSheet.create({
     color: '#555',
     marginBottom: 3,
   },
-  favoriteButton: {
-    backgroundColor: '#007bff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 20,
-    marginTop: 8,
-    alignSelf: 'flex-start',
-  },
-  favoriteButtonActive: {
-    backgroundColor: '#dc3545',
-  },
-  favoriteButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginLeft: 4,
-  },
   favoritesContainer: {
     backgroundColor: '#fff',
     borderRadius: 10,

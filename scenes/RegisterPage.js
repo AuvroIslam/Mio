@@ -103,7 +103,29 @@ const RegisterPage = ({ navigation }) => {
   useEffect(() => {
     console.log("RegisterPage mounted - clearing loading state");
     setAuthLoading(false);
-  }, [setAuthLoading]);
+    
+    // Log subscription data during initial render
+    const debugSubscriptionData = async () => {
+      if (currentUser) {
+        const response = await firestoreService.getUserSubscription(currentUser.uid);
+        console.log("DEBUG - Initial subscription data:", response.data);
+        
+        // Important: Check for active cooldown in incoming data
+        if (response.data && response.data.counterStartedAt) {
+          const now = new Date();
+          const cooldownStarted = new Date(response.data.counterStartedAt);
+          const secondsSinceStart = Math.floor((now - cooldownStarted) / 1000);
+          
+          // If cooldown is still active, log a warning
+          if (secondsSinceStart < 120) {
+            console.log("WARNING: Active cooldown detected during registration, preserving cooldown state");
+          }
+        }
+      }
+    };
+    
+    debugSubscriptionData();
+  }, []);
   
   // Ensure RegisterPage is not shown if profile is complete
   useEffect(() => {

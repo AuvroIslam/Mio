@@ -35,8 +35,12 @@ service cloud.firestore {
       // Allow users to create/update their own subscription data
       allow create, update: if request.auth != null && request.auth.uid == userId;
       
-      // Allow matching service to update subscription data during bidirectional matching
-      allow update: if request.auth != null;
+      // Allow admin service to update match-related fields only (more secure)
+      // Requires admin role claim or performing only certain updates (for matching service)
+      allow update: if request.auth != null && 
+                    (request.auth.token.admin == true || 
+                     request.resource.data.diff(resource.data).affectedKeys()
+                      .hasOnly(['matchesThisWeek', 'matches']));
       
       // Never allow deletion of subscription data
       allow delete: if false;

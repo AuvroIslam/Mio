@@ -194,15 +194,6 @@ const firestoreService = {
       // Commit all changes
       await batch.commit();
       
-      // Update matches after removing favorite
-      try {
-        await firestoreService.updateBidirectionalMatches(userId);
-        console.log('Successfully updated matches after removing favorite');
-      } catch (matchError) {
-        console.error('Error updating matches after removing favorite:', matchError);
-        // Continue execution - this is not critical for the removal operation
-      }
-      
       return true;
     } catch (error) {
       console.error('Error removing favorite:', error);
@@ -260,9 +251,12 @@ const firestoreService = {
       const userData = userDoc.data();
       const userFavorites = userData.favorites || [];
       
-      // If user has no favorites, clear matches
-      if (userFavorites.length === 0) {
-        await updateDoc(userRef, { matches: [], matchesData: {} });
+      // Get current matches to preserve them
+      const currentMatches = userData.matches || [];
+      const currentMatchesData = userData.matchesData || {};
+      
+      // If user has no favorites and no existing matches, nothing to do
+      if (userFavorites.length === 0 && currentMatches.length === 0) {
         return { success: true, matches: [] };
       }
       
@@ -301,11 +295,20 @@ const firestoreService = {
       }
       
       // Filter to users who meet the match threshold
-      const matches = [];
-      const matchesData = {};
+      const newMatches = [];
+      const matchesData = {...currentMatchesData}; // Start with existing matches data
       
       // Process potential matches to check gender and location compatibility
       for (const [matchUserId, count] of potentialMatches.entries()) {
+        // Skip if already in current matches (permanent matches)
+        if (currentMatches.includes(matchUserId)) {
+          // Just update the match count if needed
+          if (matchesData[matchUserId]) {
+            matchesData[matchUserId].matchCount = count;
+          }
+          continue;
+        }
+        
         if (count >= MATCH_THRESHOLD) {
           // Get this user's profile details
           const matchUserDoc = await getDoc(doc(db, 'users', matchUserId));
@@ -398,7 +401,7 @@ const firestoreService = {
             
             // If both gender and location are compatible, add to matches
             if (genderCompatible && locationCompatible) {
-              matches.push(matchUserId);
+              newMatches.push(matchUserId);
               matchesData[matchUserId] = {
                 userName: matchUserData.userName || 'User',
                 photoURL: matchUserData.photoURL || '',
@@ -409,32 +412,58 @@ const firestoreService = {
         }
       }
       
-      // Update current user's matches
-      await updateDoc(userRef, { matches, matchesData });
+      // Combine current matches with new matches (preserving all existing matches)
+      const allMatches = [...new Set([...currentMatches, ...newMatches])];
       
-      // For each match, ensure the relationship is bidirectional
+      // Update current user's matches
+      await updateDoc(userRef, { matches: allMatches, matchesData });
+      
+      // For each new match, ensure the relationship is bidirectional
       const batch = writeBatch(db);
       let batchCount = 0;
       
-      for (const matchUserId of matches) {
+      for (const matchUserId of newMatches) {
         const matchUserRef = doc(db, 'users', matchUserId);
+        const matchUserDoc = await getDoc(matchUserRef);
         
-        // Update the match data for the other user
-        batch.update(matchUserRef, {
-          [`matchesData.${userId}`]: {
-            userName: userData.userName || 'User',
-            photoURL: userData.photoURL || '',
-            matchCount: potentialMatches.get(matchUserId) || 0
-          },
-          matches: arrayUnion(userId)
-        });
-        
-        batchCount++;
-        
-        // Commit in batches of 500 (Firestore limit)
-        if (batchCount >= 500) {
-          await batch.commit();
-          batchCount = 0;
+        if (matchUserDoc.exists()) {
+          const matchUserData = matchUserDoc.data();
+          const matchUserMatches = matchUserData.matches || [];
+          const matchUserMatchesData = matchUserData.matchesData || {};
+          
+          // Update the match data for the other user
+          // Check if this user is already a match (shouldn't be, but double-check)
+          if (!matchUserMatches.includes(userId)) {
+            batch.update(matchUserRef, {
+              [`matchesData.${userId}`]: {
+                userName: userData.userName || 'User',
+                photoURL: userData.photoURL || '',
+                matchCount: potentialMatches.get(matchUserId) || 0
+              },
+              matches: arrayUnion(userId)
+            });
+            
+            batchCount++;
+            
+            // Commit in batches of 500 (Firestore limit)
+            if (batchCount >= 500) {
+              await batch.commit();
+              batchCount = 0;
+            }
+          } else if (matchUserMatchesData[userId]) {
+            // Just update the match count for existing match
+            batch.update(matchUserRef, {
+              [`matchesData.${userId}.matchCount`]: potentialMatches.get(matchUserId) || 0
+            });
+            
+            batchCount++;
+            
+            // Commit in batches of 500 (Firestore limit)
+            if (batchCount >= 500) {
+              await batch.commit();
+              batchCount = 0;
+            }
+          }
         }
       }
       
@@ -443,8 +472,8 @@ const firestoreService = {
         await batch.commit();
       }
       
-      console.log(`Updated matches for user ${userId}: found ${matches.length} matches`);
-      return { success: true, matches };
+      console.log(`Updated matches for user ${userId}: found ${allMatches.length} total matches (${newMatches.length} new)`);
+      return { success: true, matches: allMatches };
     } catch (error) {
       console.error('Error updating matches:', error);
       return { success: false, error: error.message };
@@ -743,15 +772,30 @@ const firestoreService = {
   // Get user subscription data
   getUserSubscription: async (userId) => {
     try {
+      console.log('==========================================');
+      console.log('FETCHING SUBSCRIPTION DATA FOR USER:', userId);
       const userSubscriptionRef = doc(db, 'userSubscriptions', userId);
       const docSnap = await getDoc(userSubscriptionRef);
       
       if (docSnap.exists()) {
+        const data = docSnap.data();
+        console.log('DATA RECEIVED FROM FIRESTORE:');
+        console.log(JSON.stringify(data, null, 2));
+        console.log('COOLDOWN STATUS: ', data.counterStartedAt ? 'ACTIVE' : 'INACTIVE');
+        if (data.counterStartedAt) {
+          const now = new Date();
+          const cooldownStarted = new Date(data.counterStartedAt);
+          const secondsSinceStart = Math.floor((now - cooldownStarted) / 1000);
+          console.log('COOLDOWN TIME REMAINING:', 120 - secondsSinceStart, 'seconds');
+        }
+        console.log('==========================================');
         return {
           success: true,
-          data: docSnap.data()
+          data: data
         };
       } else {
+        console.log('NO DATA FOUND IN FIRESTORE FOR USER:', userId);
+        console.log('==========================================');
         return {
           success: true,
           data: null
@@ -766,12 +810,54 @@ const firestoreService = {
     }
   },
 
-  // Update user subscription data
+  // Update user subscription data - MAKE SURE TO NOT OVERWRITE COOLDOWN DATA
   updateUserSubscription: async (userId, subscriptionData) => {
     try {
-      const userSubscriptionRef = doc(db, 'userSubscriptions', userId);
-      await setDoc(userSubscriptionRef, subscriptionData, { merge: true });
+      console.log('==========================================');
+      console.log('UPDATING SUBSCRIPTION DATA FOR USER:', userId);
+      console.log('DATA BEING SENT TO FIRESTORE:');
+      console.log(JSON.stringify(subscriptionData, null, 2));
       
+      // CRITICAL FIX: Check if there's already data with an active cooldown before overwriting
+      const existingData = await getDoc(doc(db, 'userSubscriptions', userId));
+      let dataToSave = subscriptionData;
+      
+      // If we have existing data with an active cooldown
+      if (existingData.exists() && existingData.data().counterStartedAt) {
+        const existing = existingData.data();
+        const now = new Date();
+        const cooldownStarted = new Date(existing.counterStartedAt);
+        const secondsSinceStart = Math.floor((now - cooldownStarted) / 1000);
+        
+        console.log('EXISTING DATA HAS COOLDOWN:', existing.counterStartedAt);
+        console.log('SECONDS SINCE COOLDOWN STARTED:', secondsSinceStart);
+        
+        // If cooldown hasn't expired yet (2 minutes = 120 seconds), preserve cooldown data
+        if (secondsSinceStart < 120) {
+          console.log('PRESERVING COOLDOWN - ACTIVE COOLDOWN FOUND');
+          console.log('COOLDOWN REMAINING:', 120 - secondsSinceStart, 'seconds');
+          
+          // Important: ALWAYS keep the changesThisWeek at max when cooldown is active
+          dataToSave = {
+            ...subscriptionData,
+            counterStartedAt: existing.counterStartedAt,
+            changesThisWeek: 3  // Force to maximum (should match MAX_CHANGES_PER_WEEK)
+          };
+          
+          console.log('MODIFIED DATA BEING SAVED TO FIRESTORE:');
+          console.log(JSON.stringify(dataToSave, null, 2));
+        } else {
+          console.log('COOLDOWN EXPIRED - NOT PRESERVING');
+        }
+      } else {
+        console.log('NO ACTIVE COOLDOWN FOUND IN EXISTING DATA');
+      }
+      
+      const userSubscriptionRef = doc(db, 'userSubscriptions', userId);
+      await setDoc(userSubscriptionRef, dataToSave, { merge: true });
+      
+      console.log('SUCCESSFULLY UPDATED DATA IN FIRESTORE');
+      console.log('==========================================');
       return {
         success: true
       };

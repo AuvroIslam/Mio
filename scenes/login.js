@@ -9,6 +9,8 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { useAuth } from '../config/AuthContext';
+import { auth } from '../config/firebaseConfig';
+import firestoreService from '../services/firestoreService';
 
 const Login = ({ navigation }) => {
   const [email, setEmail] = useState('');
@@ -19,23 +21,55 @@ const Login = ({ navigation }) => {
 
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+      Alert.alert('Error', 'Please enter both email and password');
       return;
     }
     
     try {
+      console.log('==========================================');
+      console.log('LOGIN PROCESS STARTED');
       setLoading(true);
-      await login(email, password);
+      
+      const userCredential = await login(email, password);
+      console.log('LOGIN SUCCESSFUL - USER:', userCredential.user.uid);
+      
+      setTimeout(async () => {
+        try {
+          if (auth.currentUser) {
+            console.log('CHECKING SUBSCRIPTION DATA AFTER LOGIN');
+            console.log('USER:', auth.currentUser.uid);
+            
+            const response = await firestoreService.getUserSubscription(auth.currentUser.uid);
+            
+            console.log('SUBSCRIPTION DATA AFTER LOGIN:');
+            console.log(JSON.stringify(response.data, null, 2));
+            
+            if (response.data && response.data.counterStartedAt) {
+              const now = new Date();
+              const cooldownStarted = new Date(response.data.counterStartedAt);
+              const secondsSinceStart = Math.floor((now - cooldownStarted) / 1000);
+              
+              console.log('COOLDOWN STATUS: ACTIVE');
+              console.log('COOLDOWN START TIME:', cooldownStarted.toISOString());
+              console.log('SECONDS ELAPSED:', secondsSinceStart);
+              console.log('REMAINING SECONDS:', Math.max(0, 120 - secondsSinceStart));
+              console.log('CHANGES THIS WEEK:', response.data.changesThisWeek);
+            } else {
+              console.log('COOLDOWN STATUS: INACTIVE');
+            }
+            
+            console.log('LOGIN CHECK COMPLETE');
+            console.log('==========================================');
+          }
+        } catch (error) {
+          console.error('Error checking subscription data:', error);
+        }
+      }, 1000);
+      
     } catch (error) {
-      let errorMessage = 'Failed to log in';
+      let errorMessage = 'Failed to login';
       
       switch(error.code) {
-        case 'auth/invalid-email':
-          errorMessage = 'Please enter a valid email address';
-          break;
-        case 'auth/user-disabled':
-          errorMessage = 'This account has been disabled';
-          break;
         case 'auth/user-not-found':
         case 'auth/wrong-password':
           errorMessage = 'Invalid email or password';
@@ -44,6 +78,8 @@ const Login = ({ navigation }) => {
           errorMessage = error.message;
       }
       
+      console.log('LOGIN ERROR:', error.code, error.message);
+      console.log('==========================================');
       Alert.alert('Login Error', errorMessage);
     } finally {
       setLoading(false);

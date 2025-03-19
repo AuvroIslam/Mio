@@ -49,6 +49,9 @@ export const AuthProvider = ({ children }) => {
       // This is an existing user, not a new one
       setIsNewUser(false);
       console.log("Login attempt for existing user");
+      
+      // IMPORTANT: Don't reset or modify subscription data on login
+      // Just authenticate the user and let SubscriptionContext load the existing data
       const result = await signInWithEmailAndPassword(auth, email, password);
       return result;
     } catch (error) {

@@ -14,6 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import { useFavorites } from '../config/FavoritesContext';
+import { useSubscription } from '../config/SubscriptionContext';
 
 const { width } = Dimensions.get('window');
 
@@ -21,14 +22,53 @@ const AnimeDetails = ({ route, navigation }) => {
   const { anime } = route.params;
   const [loading, setLoading] = useState(false);
   const [animeDetails, setAnimeDetails] = useState(null);
+  const [countdown, setCountdown] = useState('');
+  const [countdownInitialized, setCountdownInitialized] = useState(false);
   const { currentUser } = useAuth();
   const { isInFavorites, addToFavorites, removeFromFavorites, processingFavorite } = useFavorites();
+  const { canMakeChange, getFormattedTimeRemaining, isInCooldown, usageStats, loading: subscriptionLoading } = useSubscription();
   
   // Determine if anime is in favorites
   const isFavorite = isInFavorites(anime.mal_id);
   
+  // Countdown timer effect
+  useEffect(() => {
+    let interval = null;
+    
+    if (subscriptionLoading) {
+      // Don't initialize the countdown yet if subscription is still loading
+      return;
+    }
+    
+    if (usageStats.counterStartedAt) {
+      // Mark as initialized first to prevent flicker
+      setCountdownInitialized(true);
+      
+      // Initialize countdown immediately 
+      setCountdown(getFormattedTimeRemaining());
+      
+      // Start the countdown timer to update every second
+      interval = setInterval(() => {
+        setCountdown(getFormattedTimeRemaining());
+      }, 1000);
+    } else {
+      // No countdown needed, but we're still initialized
+      setCountdown('');
+      setCountdownInitialized(true);
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [usageStats.counterStartedAt, subscriptionLoading]);
+
   // Fetch additional anime details if needed
   useEffect(() => {
+    // Don't fetch until countdown is initialized
+    if (!countdownInitialized) {
+      return;
+    }
+    
     // If anime data is complete, use it directly
     if (anime.synopsis && anime.genres) {
       setAnimeDetails(anime);
@@ -58,7 +98,19 @@ const AnimeDetails = ({ route, navigation }) => {
     };
     
     fetchAnimeDetails();
-  }, [anime]);
+  }, [anime, countdownInitialized]);
+
+  // Main render function - show loading screen until initialized
+  if (subscriptionLoading || !countdownInitialized) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#007bff" />
+        <Text style={styles.loadingText}>
+          Loading...
+        </Text>
+      </View>
+    );
+  }
 
   const toggleFavorite = async () => {
     if (!currentUser) {
@@ -74,23 +126,28 @@ const AnimeDetails = ({ route, navigation }) => {
     try {
       let success;
       if (isFavorite) {
+        // Check if user can make changes (only for removals)
+        if (!canMakeChange()) {
+          // If in cooldown, show generic message
+          Alert.alert(
+            'Weekly Limit Reached',
+            `You've used all your weekly changes. Please wait 2 minutes or upgrade to premium.`
+          );
+          return;
+        }
+        
         // Remove from favorites
         success = await removeFromFavorites(anime.mal_id);
         if (success) {
           Alert.alert('Success', `${anime.title} removed from favorites`);
         }
-        // Otherwise removeFromFavorites will show its own alert
       } else {
         // Add to favorites
         success = await addToFavorites(anime);
         if (success) {
           Alert.alert('Success', `${anime.title} added to favorites`);
         }
-        // Otherwise addToFavorites will show its own alert
       }
-      
-      // We don't need to throw errors here - the FavoritesContext
-      // already shows appropriate alerts for subscription limits
     } catch (error) {
       console.error('Error toggling favorite:', error);
       Alert.alert('Error', error.message || 'Failed to update favorites');
@@ -286,13 +343,13 @@ const AnimeDetails = ({ route, navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8f9fa',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f8f9fa',
   },
   header: {
     position: 'relative',
@@ -453,6 +510,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     color: '#333',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666',
   }
 });
 
