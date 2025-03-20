@@ -12,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import { useFavorites } from '../config/FavoritesContext';
+import { useSubscription } from '../config/SubscriptionContext';
 import firestoreService from '../services/firestoreService';
 
 const Profile = ({ navigation }) => {
@@ -19,6 +20,7 @@ const Profile = ({ navigation }) => {
   const [userData, setUserData] = useState(null);
   const { currentUser, logout } = useAuth();
   const { favorites } = useFavorites();
+  const { isPremium, upgradeToPremium, getSubscriptionTier, LIMITS } = useSubscription();
 
   // Load user profile when screen is focused or current user changes
   useEffect(() => {
@@ -66,6 +68,34 @@ const Profile = ({ navigation }) => {
     } catch (error) {
       Alert.alert('Logout Error', error.message);
     }
+  };
+
+  const handleUpgradeToPremium = async () => {
+    if (isPremium) {
+      Alert.alert('Already Premium', 'You are already a premium user!');
+      return;
+    }
+    
+    Alert.alert(
+      'Upgrade to Premium',
+      'Upgrade to premium for unlimited favorites, changes, and matches!',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Upgrade Now',
+          onPress: async () => {
+            const success = await upgradeToPremium();
+            if (success) {
+              // Refresh user profile after upgrade
+              loadUserProfile();
+            }
+          }
+        }
+      ]
+    );
   };
 
   const renderFavoriteItem = ({ item }) => (
@@ -118,6 +148,64 @@ const Profile = ({ navigation }) => {
         )}
         style={styles.photoGallery}
       />
+    );
+  };
+
+  const renderPremiumStatus = () => {
+    const tier = getSubscriptionTier();
+    const tierColor = tier === 'PREMIUM' ? '#FFD700' : '#6c757d';
+    
+    const limits = tier === 'PREMIUM' ? LIMITS.PREMIUM : LIMITS.FREE;
+    
+    return (
+      <View style={styles.premiumStatusContainer}>
+        <View style={[styles.tierBadge, tier === 'PREMIUM' ? styles.premiumBadge : styles.freeBadge]}>
+          <Ionicons 
+            name={tier === 'PREMIUM' ? "star" : "star-outline"} 
+            size={24} 
+            color={tier === 'PREMIUM' ? "#FFD700" : "#6c757d"} 
+          />
+          <Text style={[styles.tierText, {color: tierColor}]}>
+            {tier === 'PREMIUM' ? 'PREMIUM' : 'FREE'}
+          </Text>
+        </View>
+        
+        <View style={styles.limitsContainer}>
+          <View style={styles.limitRow}>
+            <Ionicons name="heart" size={18} color="#007bff" style={styles.limitIcon} />
+            <Text style={styles.limitLabel}>Max Favorites: </Text>
+            <Text style={styles.limitValue}>
+              {limits.MAX_FAVORITES === Infinity ? 'Unlimited' : limits.MAX_FAVORITES}
+            </Text>
+          </View>
+          
+          <View style={styles.limitRow}>
+            <Ionicons name="swap-horizontal" size={18} color="#007bff" style={styles.limitIcon} />
+            <Text style={styles.limitLabel}>Weekly Changes: </Text>
+            <Text style={styles.limitValue}>
+              {limits.MAX_CHANGES_PER_WEEK === Infinity ? 'Unlimited' : limits.MAX_CHANGES_PER_WEEK}
+            </Text>
+          </View>
+          
+          <View style={styles.limitRow}>
+            <Ionicons name="people" size={18} color="#007bff" style={styles.limitIcon} />
+            <Text style={styles.limitLabel}>Weekly Matches: </Text>
+            <Text style={styles.limitValue}>
+              {limits.MAX_MATCHES_PER_WEEK === Infinity ? 'Unlimited' : limits.MAX_MATCHES_PER_WEEK}
+            </Text>
+          </View>
+        </View>
+        
+        {!isPremium && (
+          <TouchableOpacity 
+            style={styles.upgradeButton}
+            onPress={handleUpgradeToPremium}
+          >
+            <Ionicons name="star" size={18} color="#fff" />
+            <Text style={styles.upgradeButtonText}>Upgrade to Premium</Text>
+          </TouchableOpacity>
+        )}
+      </View>
     );
   };
 
@@ -243,6 +331,12 @@ const Profile = ({ navigation }) => {
               </TouchableOpacity>
             </View>
           </View>
+        </View>
+        
+        {/* Premium Status Card */}
+        <View style={styles.profileCard}>
+          <Text style={styles.sectionTitle}>Subscription Status</Text>
+          {renderPremiumStatus()}
         </View>
         
         <View style={styles.profileCard}>
@@ -458,6 +552,80 @@ const styles = StyleSheet.create({
     color: '#007bff',
     marginRight: 5,
     width: 150,
+  },
+  premiumStatusContainer: {
+    marginVertical: 10,
+  },
+  tierBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 15,
+    borderWidth: 2,
+    borderRadius: 20,
+    alignSelf: 'center',
+    marginBottom: 15,
+    backgroundColor: '#f8f9fa',
+  },
+  premiumBadge: {
+    borderColor: '#FFD700',
+    backgroundColor: '#FFF8E1',
+  },
+  freeBadge: {
+    borderColor: '#6c757d',
+    backgroundColor: '#f8f9fa',
+  },
+  tierText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  limitsContainer: {
+    marginBottom: 15,
+  },
+  limitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    backgroundColor: '#f8f9fa',
+    padding: 10,
+    borderRadius: 8,
+  },
+  limitIcon: {
+    marginRight: 10,
+  },
+  limitLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#444',
+    flex: 1,
+  },
+  limitValue: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#007bff',
+  },
+  upgradeButton: {
+    backgroundColor: '#007bff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    alignSelf: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+  },
+  upgradeButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginLeft: 8,
   },
 });
 

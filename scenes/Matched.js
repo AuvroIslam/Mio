@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
+import { useSubscription } from '../config/SubscriptionContext';
 import firestoreService from '../services/firestoreService';
 
 const Matched = ({ navigation }) => {
@@ -18,6 +19,7 @@ const Matched = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null);
   const { currentUser } = useAuth();
+  const { isPremium, LIMITS } = useSubscription();
   const [matchStats, setMatchStats] = useState({
     matchCount: 0,
     matchThreshold: 2,
@@ -194,10 +196,22 @@ const Matched = ({ navigation }) => {
       <View style={styles.matchIndicator}>
         <Text style={styles.sectionTitle}>Match Statistics</Text>
         
+        {/* Premium indicator */}
+        {isPremium && (
+          <View style={styles.premiumBadge}>
+            <Ionicons name="star" size={16} color="#FFD700" />
+            <Text style={styles.premiumText}>PREMIUM</Text>
+          </View>
+        )}
+        
         <View style={styles.matchStatRow}>
           <Ionicons name="people" size={20} color="#0056b3" style={styles.matchIcon} />
           <Text style={styles.matchStatText}>
-            Weekly Matches: {matchStats.matchCount}/{matchStats.matchThreshold}
+            Weekly Matches: {isPremium ? (
+              <Text style={styles.premiumValueText}>Unlimited</Text>
+            ) : (
+              `${matchStats.matchCount}/${matchStats.matchThreshold}`
+            )}
           </Text>
         </View>
         
@@ -221,9 +235,9 @@ const Matched = ({ navigation }) => {
       <TouchableOpacity 
         style={[
           styles.searchMatchButton, 
-          (matchStats.matchCount >= matchStats.matchThreshold || matchCooldownActive) && styles.disabledButton
+          (!isPremium && (matchStats.matchCount >= matchStats.matchThreshold || matchCooldownActive)) && styles.disabledButton
         ]}
-        disabled={matchStats.matchCount >= matchStats.matchThreshold || matchCooldownActive || searchingMatch}
+        disabled={(!isPremium && (matchStats.matchCount >= matchStats.matchThreshold || matchCooldownActive)) || searchingMatch}
         onPress={handleMatchSearch}
       >
         {searchingMatch ? (
@@ -235,6 +249,20 @@ const Matched = ({ navigation }) => {
           </>
         )}
       </TouchableOpacity>
+      
+      {/* Premium upgrade prompt for free users */}
+      {!isPremium && (
+        <TouchableOpacity 
+          style={styles.upgradeBanner}
+          onPress={() => navigation.navigate('Profile')}
+        >
+          <Ionicons name="star" size={16} color="#FFD700" />
+          <Text style={styles.upgradeText}>
+            Upgrade to Premium for {LIMITS.PREMIUM.MAX_MATCHES_PER_WEEK} matches per week!
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color="#FFD700" />
+        </TouchableOpacity>
+      )}
     </View>
   );
 
@@ -263,10 +291,11 @@ const Matched = ({ navigation }) => {
       return;
     }
     
-    // Check if user has reached match limit
-    if (matchStats.matchCount >= matchStats.matchThreshold || matchCooldownActive) {
+    // Premium users can always search for matches
+    // Free users need to check limit
+    if (!isPremium && (matchStats.matchCount >= matchStats.matchThreshold || matchCooldownActive)) {
       Alert.alert('Weekly Limit Reached', 
-        'You\'ve used all your weekly matches. Please wait for the cooldown to end.');
+        'You\'ve used all your weekly matches. Please wait for the cooldown to end or upgrade to premium.');
       return;
     }
     
@@ -302,22 +331,73 @@ const Matched = ({ navigation }) => {
     try {
       const matchResponse = await firestoreService.getUserSubscription(currentUser.uid);
       if (matchResponse.success && matchResponse.data) {
+        // Get appropriate match threshold based on subscription status
+        const matchThreshold = isPremium ? 
+          LIMITS.PREMIUM.MAX_MATCHES_PER_WEEK : 
+          LIMITS.FREE.MAX_MATCHES_PER_WEEK;
+        
+        // For premium users, we need to handle cooldowns differently
+        if (isPremium) {
+          // If premium user has an active cooldown, remove it
+          if (matchResponse.data.matchCooldownStartedAt || !matchResponse.data.availableForMatching) {
+            console.log('Premium user detected with active cooldown - removing cooldown');
+            
+            // Update Firestore to remove the cooldown
+            await firestoreService.updateUserSubscription(currentUser.uid, {
+              matchCount: 0,
+              matchCooldownStartedAt: null,
+              availableForMatching: true,
+              matchThreshold: matchThreshold
+            });
+            
+            // Set local state to reflect removed cooldown
+            setMatchStats({
+              matchCount: 0,
+              matchThreshold: matchThreshold,
+              matchCooldownStartedAt: null,
+              availableForMatching: true
+            });
+            
+            // Update UI cooldown status
+            setMatchCooldownActive(false);
+            setMatchCooldownTime('00:00');
+            
+            console.log('Cooldown removed for premium user');
+            return;  // Exit early as we've already updated everything
+          }
+        }
+        
         console.log('⚡ Match stats fetched:', {
           matchCount: matchResponse.data.matchCount || 0,
-          threshold: matchResponse.data.matchThreshold || 2,
+          threshold: matchThreshold,
           cooldown: matchResponse.data.matchCooldownStartedAt ? 'Active' : 'Inactive',
           available: matchResponse.data.availableForMatching !== false
         });
         
+        // Use the premium match threshold if user is premium
         setMatchStats({
           matchCount: matchResponse.data.matchCount || 0,
-          matchThreshold: matchResponse.data.matchThreshold || 2,
-          matchCooldownStartedAt: matchResponse.data.matchCooldownStartedAt,
-          availableForMatching: matchResponse.data.availableForMatching !== false
+          matchThreshold: matchThreshold,
+          matchCooldownStartedAt: isPremium ? null : matchResponse.data.matchCooldownStartedAt,
+          availableForMatching: isPremium ? true : matchResponse.data.availableForMatching !== false
         });
         
-        // Update cooldown status
-        updateCooldownStatus(matchResponse.data.matchCooldownStartedAt);
+        // Update cooldown status (for non-premium users)
+        if (!isPremium) {
+          updateCooldownStatus(matchResponse.data.matchCooldownStartedAt);
+        } else {
+          // Ensure premium users never see a cooldown
+          setMatchCooldownActive(false);
+          setMatchCooldownTime('00:00');
+        }
+        
+        // If premium and the user has a lower threshold in Firestore, update it
+        if (isPremium && matchResponse.data.matchThreshold < matchThreshold) {
+          await firestoreService.updateUserSubscription(currentUser.uid, {
+            matchThreshold: matchThreshold
+          });
+          console.log(`Updated match threshold to ${matchThreshold} for premium user`);
+        }
       }
     } catch (error) {
       console.error('❌ Error fetching match stats:', error);
@@ -576,6 +656,48 @@ const styles = StyleSheet.create({
   disabledButton: {
     backgroundColor: '#6c757d',
     opacity: 0.7,
+  },
+  premiumBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8E1',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 15,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+    alignSelf: 'center',
+  },
+  premiumText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#996515',
+    marginLeft: 4,
+  },
+  upgradeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF8E1',
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+  },
+  upgradeText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#996515',
+    marginHorizontal: 8,
+    textAlign: 'center',
+    flex: 1,
+  },
+  premiumValueText: {
+    fontWeight: 'bold',
+    color: '#FFD700',
   },
 });
 

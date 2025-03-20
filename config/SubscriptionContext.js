@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Alert } from 'react-native';
 import { useAuth } from './AuthContext';
 import firestoreService from '../services/firestoreService';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../config/firebaseConfig';
 
 // Create the context
 const SubscriptionContext = createContext();
@@ -201,11 +203,14 @@ export const SubscriptionProvider = ({ children }) => {
       changesThisWeek: usageStats.changesThisWeek
     });
     
+    // Premium users have unlimited changes - no tracking needed
     if (isPremium) {
       console.log('USER IS PREMIUM - NO LIMIT APPLIES');
       console.log('==========================================');
       return 0; // Premium users have unlimited changes
     }
+    
+    // Free users - handle cooldown logic
     
     // Check if cooldown is active
     if (usageStats.counterStartedAt) {
@@ -336,7 +341,10 @@ export const SubscriptionProvider = ({ children }) => {
 
   // Check if user can make changes
   const canMakeChange = () => {
+    // Premium users can always make changes
     if (isPremium) return true;
+    
+    // Free users need to check cooldown
     
     // Check for cooldown expiration first
     if (checkCooldownStatus()) {
@@ -430,9 +438,12 @@ export const SubscriptionProvider = ({ children }) => {
     return updated.matchesThisWeek;
   };
 
-  // Check if user can have more matches (kept for compatibility)
+  // Check if user can have more matches
   const canHaveMoreMatches = () => {
+    // Premium users always have unlimited matches
     if (isPremium) return true;
+    
+    // For free users, check against their limits
     return usageStats.matchesThisWeek < SUBSCRIPTION_LIMITS.FREE.MAX_MATCHES_PER_WEEK;
   };
 
@@ -441,12 +452,47 @@ export const SubscriptionProvider = ({ children }) => {
     if (!currentUser) return false;
     
     try {
+      // Set premium status
       setIsPremium(true);
-      await updateUsageStats({ isPremium: true });
+      
+      // Reset any active cooldowns
+      const updatedStats = {
+        isPremium: true,
+        counterStartedAt: null,  // Reset changes cooldown
+        changesThisWeek: 0,      // Reset changes count
+      };
+      
+      // Apply the updates
+      await updateUsageStats(updatedStats);
+      
+      // Also reset match cooldown if it exists
+      try {
+        // Check if there's an active match cooldown
+        const subscriptionRef = doc(db, 'subscriptions', currentUser.uid);
+        const subscriptionDoc = await getDoc(subscriptionRef);
+        
+        if (subscriptionDoc.exists() && 
+            (subscriptionDoc.data().matchCooldownStartedAt || 
+             !subscriptionDoc.data().availableForMatching)) {
+          
+          console.log('Resetting match cooldown for premium user');
+          
+          // Reset match cooldown
+          await firestoreService.updateUserSubscription(currentUser.uid, {
+            matchCount: 0,
+            matchCooldownStartedAt: null,
+            availableForMatching: true,
+            matchThreshold: SUBSCRIPTION_LIMITS.PREMIUM.MAX_MATCHES_PER_WEEK
+          });
+        }
+      } catch (matchError) {
+        console.error('Error resetting match cooldown:', matchError);
+        // Continue with premium upgrade even if match reset fails
+      }
       
       Alert.alert(
         'Premium Activated!', 
-        'You now have access to all premium features.'
+        'You now have access to all premium features and all cooldowns have been reset.'
       );
       
       return true;

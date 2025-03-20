@@ -114,12 +114,16 @@ const Home = ({ navigation }) => {
   // Render a small usage indicator 
   const renderUsageIndicator = () => {
     const cooldownActive = isInCooldown();
+    const { isPremium } = usageStats;
+    const maxFavoritesDisplay = isPremium ? LIMITS.PREMIUM.MAX_FAVORITES : LIMITS.FREE.MAX_FAVORITES;
     
     return (
       <View style={styles.usageIndicator}>
         <View style={styles.usageRow}>
           <Text style={styles.usageText}>
-            Favorites: {favorites.length}/{maxFavorites}
+            Favorites: {favorites.length}/{maxFavoritesDisplay === Infinity ? (
+              <Text style={styles.premiumText}>Unlimited</Text>
+            ) : maxFavoritesDisplay}
           </Text>
           {cooldownActive ? (
             <Text style={[styles.usageText, styles.lockedText]}>
@@ -127,8 +131,20 @@ const Home = ({ navigation }) => {
             </Text>
           ) : (
             <Text style={styles.usageText}>
-              Weekly Removals: {weeklyChangesCount}/{maxWeeklyChanges}
+              Weekly Removals: {isPremium ? (
+                <Text style={styles.premiumText}>Unlimited</Text>
+              ) : (
+                `${weeklyChangesCount}/${maxWeeklyChanges}`
+              )}
             </Text>
+          )}
+          
+          {/* Premium badge indicator */}
+          {isPremium && (
+            <View style={styles.premiumIndicator}>
+              <Ionicons name="star" size={14} color="#FFD700" />
+              <Text style={styles.premiumIndicatorText}>PREMIUM</Text>
+            </View>
           )}
         </View>
       </View>
@@ -641,6 +657,27 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.6,
+  },
+  premiumText: {
+    color: '#FFD700',
+    fontWeight: 'bold',
+  },
+  premiumIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF8E1',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+    marginLeft: 8,
+  },
+  premiumIndicatorText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#996515',
+    marginLeft: 2,
   },
 });
 
