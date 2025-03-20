@@ -27,7 +27,26 @@ service cloud.firestore {
       allow delete: if false;
     }
     
-    // User Subscriptions Collection
+    // New Match Subscriptions Collection
+    match /subscriptions/{userId} {
+      // Allow users to read their own subscription data
+      // AND allow any authenticated user to read other users' subscription data for matching
+      allow read: if request.auth != null;
+      
+      // Allow users to create/update their own subscription data
+      allow create, update: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow updating match-related fields for the matching service
+      // This enables the bidirectional matching to work
+      allow update: if request.auth != null && 
+                    request.resource.data.diff(resource.data).affectedKeys()
+                      .hasAny(['matchCount', 'matchCooldownStartedAt', 'availableForMatching']);
+      
+      // Never allow deletion of subscription data
+      allow delete: if false;
+    }
+    
+    // User Subscriptions Collection (legacy)
     match /userSubscriptions/{userId} {
       // Allow users to read their own subscription data
       allow read: if request.auth != null && request.auth.uid == userId;

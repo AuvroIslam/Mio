@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import { useFavorites } from '../config/FavoritesContext';
 import { useSubscription } from '../config/SubscriptionContext';
+import firestoreService from '../services/firestoreService';
 
 const Home = ({ navigation }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -107,9 +108,7 @@ const Home = ({ navigation }) => {
   useEffect(() => {
     // This ensures the component re-renders when usageStats changes
     // (especially after cooldown resets changesThisWeek to 0)
-    console.log('UsageStats updated:', usageStats.changesThisWeek, usageStats.counterStartedAt);
-    console.log('Is in cooldown?', isInCooldown());
-    console.log('Weekly changes count:', getWeeklyChangesCount());
+    // Clear previous change counter logs
   }, [usageStats]);
 
   // Render a small usage indicator 
@@ -118,18 +117,20 @@ const Home = ({ navigation }) => {
     
     return (
       <View style={styles.usageIndicator}>
-        <Text style={styles.usageText}>
-          Favorites: {favorites.length}/{maxFavorites}
-        </Text>
-        {cooldownActive ? (
-          <Text style={[styles.usageText, styles.lockedText]}>
-            Changes: Locked ({countdown} remaining)
-          </Text>
-        ) : (
+        <View style={styles.usageRow}>
           <Text style={styles.usageText}>
-            Weekly Removals: {weeklyChangesCount}/{maxWeeklyChanges}
+            Favorites: {favorites.length}/{maxFavorites}
           </Text>
-        )}
+          {cooldownActive ? (
+            <Text style={[styles.usageText, styles.lockedText]}>
+              Changes: Locked ({countdown} remaining)
+            </Text>
+          ) : (
+            <Text style={styles.usageText}>
+              Weekly Removals: {weeklyChangesCount}/{maxWeeklyChanges}
+            </Text>
+          )}
+        </View>
       </View>
     );
   };
@@ -583,14 +584,24 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   usageIndicator: {
+    flexDirection: 'column',
+    padding: 12,
+    marginBottom: 15,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  usageRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: 10,
-    marginBottom: 10,
-    backgroundColor: '#f0f8ff',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#cce5ff',
+    alignItems: 'center',
+    paddingVertical: 4,
   },
   usageText: {
     fontSize: 14,
