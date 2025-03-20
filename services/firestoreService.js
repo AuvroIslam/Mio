@@ -17,7 +17,8 @@ import {
   increment,
   Timestamp,
   orderBy,
-  limit
+  limit,
+  runTransaction
 } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
 import cloudinaryService from './cloudinaryService';
@@ -509,11 +510,7 @@ const firestoreService = {
             
             // If both gender and location are compatible, add to compatible matches array
             if (genderCompatible && locationCompatible) {
-              compatibleMatches.push({
-                userId: matchUserId,
-                commonAnime: count,
-                userData: matchUserData
-              });
+              compatibleMatches.push(matchUserId);
               console.log(`  - MATCH FOUND: Adding ${matchUserId} to compatible matches`);
             } else {
               console.log(`  - NO MATCH: Incompatible preferences with ${matchUserId}`);
@@ -523,9 +520,6 @@ const firestoreService = {
           // Continue with other potential matches
         }
       }
-      
-      // Sort compatible matches by number of common anime (highest first)
-      compatibleMatches.sort((a, b) => b.commonAnime - a.commonAnime);
       
       // Get subscription data to check match counts and thresholds
       let currentMatchCount = 0;
@@ -552,7 +546,7 @@ const firestoreService = {
       
       console.log(`User has ${currentMatchCount}/${matchThreshold} matches used, can add ${remainingMatches} new matches`);
       
-      // Only take up to the remaining matches limit
+      // Take only the first N matches based on remaining limit
       const selectedMatches = shouldProcessMatches 
         ? compatibleMatches.slice(0, remainingMatches) 
         : compatibleMatches;
@@ -560,12 +554,12 @@ const firestoreService = {
       console.log(`Selected ${selectedMatches.length} matches out of ${compatibleMatches.length} compatible matches`);
       
       // Convert selected matches to newMatches array and matchesData object
-      for (const match of selectedMatches) {
-        newMatches.push(match.userId);
-        matchesData[match.userId] = {
-          userName: match.userData.userName || 'User',
-          photoURL: match.userData.photoURL || '',
-          matchCount: match.commonAnime
+      for (const matchUserId of selectedMatches) {
+        newMatches.push(matchUserId);
+        matchesData[matchUserId] = {
+          userName: matchUserDataMap[matchUserId].userName || 'User',
+          photoURL: matchUserDataMap[matchUserId].photoURL || '',
+          matchCount: potentialMatches.get(matchUserId) || 0
         };
       }
       
@@ -575,7 +569,7 @@ const firestoreService = {
       const allMatches = [...new Set([...currentMatches, ...newMatches])];
       
       // Update current user's matches
-      await updateDoc(userRef, { matches: allMatches, matchesData });
+      await updateDoc(doc(db, 'users', userId), { matches: allMatches, matchesData });
       
       // For each new match, ensure the relationship is bidirectional
       const batch = writeBatch(db);
@@ -1050,6 +1044,7 @@ const firestoreService = {
       const userSubRef = doc(db, 'subscriptions', userId);
       const otherUserSubRef = doc(db, 'subscriptions', otherUserId);
       
+      // Fetch current subscription data for both users
       const userSubDoc = await getDoc(userSubRef);
       const otherUserSubDoc = await getDoc(otherUserSubRef);
       
@@ -1088,74 +1083,76 @@ const firestoreService = {
       const userSubDocRefreshed = await getDoc(userSubRef);
       const otherUserSubDocRefreshed = await getDoc(otherUserSubRef);
       
-      // Start a batch
-      const batch = writeBatch(db);
-      
-      // Update first user
-      if (userSubDocRefreshed.exists()) {
-        const userData = userSubDocRefreshed.data() || {};
+      // Start a transaction to ensure atomic updates
+      return await runTransaction(db, async (transaction) => {
+        // Get the latest data within the transaction
+        const latestUserSubDoc = await transaction.get(userSubRef);
+        const latestOtherUserSubDoc = await transaction.get(otherUserSubRef);
         
-        // Only increment if user is available for matching
-        if (userData.availableForMatching !== false) {
-          const newMatchCount = (userData.matchCount || 0) + 1;
-          const matchThreshold = userData.matchThreshold || 2;
+        // Update first user
+        if (latestUserSubDoc.exists()) {
+          const userData = latestUserSubDoc.data() || {};
           
-          console.log(`👤 User ${userId}: match count ${userData.matchCount || 0} → ${newMatchCount}, threshold: ${matchThreshold}`);
-          
-          // Update match count
-          const updateData = {
-            matchCount: newMatchCount,
-            updatedAt: Timestamp.now()
-          };
-          
-          // Check if threshold is reached
-          if (newMatchCount >= matchThreshold) {
-            console.log(`🚫 User ${userId} reached threshold: Activating cooldown`);
-            updateData.matchCooldownStartedAt = Timestamp.now();
-            updateData.availableForMatching = false;
+          // Only increment if user is available for matching
+          if (userData.availableForMatching !== false) {
+            const newMatchCount = (userData.matchCount || 0) + 1;
+            const matchThreshold = userData.matchThreshold || 2;
+            
+            console.log(`👤 User ${userId}: match count ${userData.matchCount || 0} → ${newMatchCount}, threshold: ${matchThreshold}`);
+            
+            // Update match count
+            const updateData = {
+              matchCount: newMatchCount,
+              updatedAt: Timestamp.now()
+            };
+            
+            // Check if threshold is reached
+            if (newMatchCount >= matchThreshold) {
+              console.log(`🚫 User ${userId} reached threshold: Activating cooldown`);
+              updateData.matchCooldownStartedAt = Timestamp.now();
+              updateData.availableForMatching = false;
+            }
+            
+            transaction.update(userSubRef, updateData);
+          } else {
+            console.log(`⚠️ User ${userId} is not available for matching, skipping increment`);
           }
-          
-          batch.update(userSubRef, updateData);
-        } else {
-          console.log(`⚠️ User ${userId} is not available for matching, skipping increment`);
         }
-      }
-      
-      // Update second user
-      if (otherUserSubDocRefreshed.exists()) {
-        const otherUserData = otherUserSubDocRefreshed.data() || {};
         
-        // Only increment if user is available for matching
-        if (otherUserData.availableForMatching !== false) {
-          const newMatchCount = (otherUserData.matchCount || 0) + 1;
-          const matchThreshold = otherUserData.matchThreshold || 2;
+        // Update second user
+        if (latestOtherUserSubDoc.exists()) {
+          const otherUserData = latestOtherUserSubDoc.data() || {};
           
-          console.log(`👤 User ${otherUserId}: match count ${otherUserData.matchCount || 0} → ${newMatchCount}, threshold: ${matchThreshold}`);
-          
-          // Update match count
-          const updateData = {
-            matchCount: newMatchCount,
-            updatedAt: Timestamp.now()
-          };
-          
-          // Check if threshold is reached
-          if (newMatchCount >= matchThreshold) {
-            console.log(`🚫 User ${otherUserId} reached threshold: Activating cooldown`);
-            updateData.matchCooldownStartedAt = Timestamp.now();
-            updateData.availableForMatching = false;
+          // Only increment if user is available for matching
+          if (otherUserData.availableForMatching !== false) {
+            const newMatchCount = (otherUserData.matchCount || 0) + 1;
+            const matchThreshold = otherUserData.matchThreshold || 2;
+            
+            console.log(`👤 User ${otherUserId}: match count ${otherUserData.matchCount || 0} → ${newMatchCount}, threshold: ${matchThreshold}`);
+            
+            // Update match count
+            const updateData = {
+              matchCount: newMatchCount,
+              updatedAt: Timestamp.now()
+            };
+            
+            // Check if threshold is reached
+            if (newMatchCount >= matchThreshold) {
+              console.log(`🚫 User ${otherUserId} reached threshold: Activating cooldown`);
+              updateData.matchCooldownStartedAt = Timestamp.now();
+              updateData.availableForMatching = false;
+            }
+            
+            transaction.update(otherUserSubRef, updateData);
+          } else {
+            console.log(`⚠️ User ${otherUserId} is not available for matching, skipping increment`);
           }
-          
-          batch.update(otherUserSubRef, updateData);
-        } else {
-          console.log(`⚠️ User ${otherUserId} is not available for matching, skipping increment`);
         }
-      }
+        
+        return { success: true };
+      });
       
-      // Commit all changes
-      await batch.commit();
       console.log(`✅ Successfully processed match between ${userId} and ${otherUserId}`);
-      
-      return { success: true };
     } catch (error) {
       console.error('❌ Error processing match:', error);
       return { success: false, error: error.message };
