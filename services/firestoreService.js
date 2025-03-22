@@ -102,17 +102,17 @@ const firestoreService = {
       if (animeUsersDoc.exists()) {
         // Anime document exists, add user to the users array
         batch.update(animeUsersRef, {
-          users: arrayUnion(userId)
-        });
-      } else {
+              users: arrayUnion(userId)
+            });
+        } else {
         // Create new anime document with this user
         batch.set(animeUsersRef, {
-          animeId: anime.mal_id,
-          title: anime.title,
+            animeId: anime.mal_id,
+            title: anime.title,
           image: anime.images?.jpg?.image_url,
-          users: [userId]
-        });
-      }
+            users: [userId]
+          });
+        }
       
       // Prepare anime data for storage
       const animeData = {
@@ -232,7 +232,7 @@ const firestoreService = {
       // Update the favorites array - remove the ID or object with this mal_id
       if (existsInFavoritesArray) {
         // First try removing it assuming it's a primitive value
-        batch.update(userRef, { 
+      batch.update(userRef, {
           favorites: arrayRemove(normalizedAnimeId) 
         });
         

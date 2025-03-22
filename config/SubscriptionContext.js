@@ -17,9 +17,9 @@ export const useSubscription = () => {
 export const SUBSCRIPTION_LIMITS = {
   FREE: {
     MAX_FAVORITES: 5,
-    MAX_CHANGES_PER_WEEK: 20,
+    MAX_CHANGES_PER_WEEK: 2,
     MAX_MATCHES_PER_WEEK: 5,
-    COOLDOWN_DURATION_MS: 120000 // 2 minutes for testing
+    COOLDOWN_DURATION_MS: 150000 // 2 minutes for testing
   },
   PREMIUM: {
     MAX_FAVORITES: Infinity,

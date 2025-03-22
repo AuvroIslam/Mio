@@ -29,7 +29,8 @@ export const DramaProvider = ({ children }) => {
     canRemoveDrama,
     usageStats,
     isInCooldown,
-    refreshCountsFromFirestore
+    refreshCountsFromFirestore,
+    getFormattedTimeRemaining
   } = useSubscription();
 
   // Max counts based on subscription
@@ -245,7 +246,7 @@ export const DramaProvider = ({ children }) => {
       if (!isPremium) {
         // Check if user is in cooldown
         if (isInCooldown()) {
-          const remainingTime = useSubscription().getFormattedTimeRemaining();
+          const remainingTime = getFormattedTimeRemaining();
           Alert.alert(
             'Cooldown Active',
             `You are currently in a cooldown period. Please wait ${remainingTime} before removing more favorites, or upgrade to premium for unlimited changes.`,

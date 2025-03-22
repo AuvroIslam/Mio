@@ -33,7 +33,8 @@ export const FavoritesProvider = ({ children }) => {
     isInCooldown,
     canAddFavorite,
     canRemoveFavorite,
-    refreshCountsFromFirestore
+    refreshCountsFromFirestore,
+    getFormattedTimeRemaining
   } = useSubscription();
 
   // Max counts based on subscription
@@ -246,7 +247,8 @@ export const FavoritesProvider = ({ children }) => {
       if (!isPremium) {
         // Check if user is in cooldown
         if (isInCooldown()) {
-          const remainingTime = useSubscription().getFormattedTimeRemaining();
+          const remainingTime = getFormattedTimeRemaining();
+          
           Alert.alert(
             'Cooldown Active',
             `You are currently in a cooldown period. Please wait ${remainingTime} before removing more favorites, or upgrade to premium for unlimited changes.`,
@@ -262,8 +264,8 @@ export const FavoritesProvider = ({ children }) => {
             ]
           );
           setProcessingFavorite(false);
-      return false;
-    }
+          return false;
+        }
 
         // Check if user has reached weekly limit
         if (weeklyChangesCount >= maxWeeklyChanges) {

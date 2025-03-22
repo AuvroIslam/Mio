@@ -180,7 +180,7 @@ const Home = ({ navigation }) => {
   useEffect(() => {
     if (countdownInitialized) {
       if (activeTab === 'anime') {
-        loadSeasonalAnime();
+      loadSeasonalAnime();
       } else {
         loadTrendingDramas();
       }
@@ -678,7 +678,7 @@ const Home = ({ navigation }) => {
         </Text>
       </TouchableOpacity>
       
-      <TouchableOpacity
+      <TouchableOpacity 
         style={[styles.tabButton, activeTab === 'drama' && styles.activeTab]}
         onPress={() => setActiveTab('drama')}
       >
