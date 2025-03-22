@@ -28,6 +28,8 @@ import {
 } from 'firebase/firestore';
 import { useAuth } from '../config/AuthContext';
 import { db } from '../config/firebaseConfig';
+import useTimer from '../hooks/useTimer';
+import LoadingModal from '../components/LoadingModal';
 
 const ChatRoom = ({ route, navigation }) => {
   const { chatId, userName, otherUserId } = route.params || {};
@@ -38,6 +40,7 @@ const ChatRoom = ({ route, navigation }) => {
   const [loadingMore, setLoadingMore] = useState(false);
   const { currentUser } = useAuth();
   const flatListRef = useRef(null);
+  const timer = useTimer();
 
   // Function to load paginated messages
   const loadMessages = async (startAfterDoc = null) => {
@@ -82,9 +85,9 @@ const ChatRoom = ({ route, navigation }) => {
         setLoading(false);
         // Scroll to bottom for new messages
         if (messageList.length > 0) {
-          setTimeout(() => {
+          timer.setTimeout(() => {
             flatListRef.current?.scrollToEnd({ animated: true });
-          }, 100);
+          }, 100, 'scroll_to_bottom');
         }
       },
       (error) => {
@@ -107,7 +110,7 @@ const ChatRoom = ({ route, navigation }) => {
     };
     markAsRead();
     return () => unsubscribe();
-  }, [chatId, navigation, currentUser]);
+  }, [chatId, navigation, currentUser, timer]);
 
   // Load more messages when scrolling up
   const loadMoreMessages = async () => {
@@ -181,7 +184,10 @@ const ChatRoom = ({ route, navigation }) => {
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : null} style={styles.container} keyboardVerticalOffset={100}>
       {loading ? (
-        <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
+        <LoadingModal
+          visible={true}
+          message="Loading messages..."
+        />
       ) : (
         <>
           <FlatList

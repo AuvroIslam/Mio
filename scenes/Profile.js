@@ -12,14 +12,19 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import { useFavorites } from '../config/FavoritesContext';
+import { useDramas } from '../config/DramaContext';
 import { useSubscription } from '../config/SubscriptionContext';
 import firestoreService from '../services/firestoreService';
+import LoadingModal from '../components/LoadingModal';
 
 const Profile = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null);
+  const [activeTab, setActiveTab] = useState('anime'); // 'anime' or 'drama'
+  
   const { currentUser, logout } = useAuth();
   const { favorites } = useFavorites();
+  const { dramas } = useDramas();
   const { isPremium, upgradeToPremium, getSubscriptionTier, LIMITS } = useSubscription();
 
   // Load user profile when screen is focused or current user changes
@@ -98,21 +103,48 @@ const Profile = ({ navigation }) => {
     );
   };
 
-  const renderFavoriteItem = ({ item }) => (
+  const renderAnimeItem = ({ item }) => (
     <TouchableOpacity 
-      style={styles.animeCard}
+      style={styles.contentCard}
       onPress={() => navigation.navigate('AnimeDetails', { anime: item })}
     >
       <Image 
         source={{ uri: item.images?.jpg?.image_url || 'https://via.placeholder.com/150' }} 
-        style={styles.animeImage}
+        style={styles.contentImage}
         resizeMode="cover"
       />
-      <View style={styles.animeInfo}>
-        <Text style={styles.animeTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.animeDetail}>Rating: {item.score || 'N/A'}</Text>
-        <Text style={styles.animeDetail} numberOfLines={1}>Type: {item.type || 'N/A'}</Text>
-        <Text style={styles.animeDetail} numberOfLines={1}>Episodes: {item.episodes || 'N/A'}</Text>
+      <View style={styles.contentInfo}>
+        <Text style={styles.contentTitle} numberOfLines={2}>{item.title}</Text>
+        <Text style={styles.contentDetail}>Rating: {item.score || 'N/A'}</Text>
+        <Text style={styles.contentDetail} numberOfLines={1}>Type: {item.type || 'N/A'}</Text>
+        <Text style={styles.contentDetail} numberOfLines={1}>Episodes: {item.episodes || 'N/A'}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderDramaItem = ({ item }) => (
+    <TouchableOpacity 
+      style={styles.contentCard}
+      onPress={() => navigation.navigate('DramaDetails', { drama: item })}
+    >
+      <Image 
+        source={{ 
+          uri: item.poster_path
+            ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+            : 'https://via.placeholder.com/150'
+        }} 
+        style={styles.contentImage}
+        resizeMode="cover"
+      />
+      <View style={styles.contentInfo}>
+        <Text style={styles.contentTitle} numberOfLines={2}>{item.name}</Text>
+        <Text style={styles.contentDetail}>Rating: {item.vote_average?.toFixed(1) || 'N/A'}</Text>
+        <Text style={styles.contentDetail} numberOfLines={1}>
+          Origin: {item.origin_country?.join(', ') || 'N/A'}
+        </Text>
+        <Text style={styles.contentDetail} numberOfLines={1}>
+          First aired: {item.first_air_date?.split('-')[0] || 'N/A'}
+        </Text>
       </View>
     </TouchableOpacity>
   );
@@ -261,9 +293,15 @@ const Profile = ({ navigation }) => {
         )}
         
         <View style={styles.infoRow}>
-          <Ionicons name="heart" size={20} color="#007bff" style={styles.infoIcon} />
-          <Text style={styles.infoLabel}>Favorites:</Text>
+          <Ionicons name="tv" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Anime:</Text>
           <Text style={styles.infoValue}>{favorites.length}</Text>
+        </View>
+
+        <View style={styles.infoRow}>
+          <Ionicons name="film" size={20} color="#007bff" style={styles.infoIcon} />
+          <Text style={styles.infoLabel}>Dramas:</Text>
+          <Text style={styles.infoValue}>{dramas.length}</Text>
         </View>
 
         <View style={styles.infoRow}>
@@ -307,6 +345,43 @@ const Profile = ({ navigation }) => {
     );
   };
   
+  // Tab selector for favorites
+  const renderFavoritesTabs = () => (
+    <View style={styles.tabContainer}>
+      <TouchableOpacity 
+        style={[styles.tabButton, activeTab === 'anime' && styles.activeTabButton]}
+        onPress={() => setActiveTab('anime')}
+      >
+        <Ionicons 
+          name="tv" 
+          size={20} 
+          color={activeTab === 'anime' ? '#fff' : '#007bff'} 
+        />
+        <Text 
+          style={[styles.tabText, activeTab === 'anime' && styles.activeTabText]}
+        >
+          Anime ({favorites.length})
+        </Text>
+      </TouchableOpacity>
+      
+      <TouchableOpacity 
+        style={[styles.tabButton, activeTab === 'drama' && styles.activeTabButton]}
+        onPress={() => setActiveTab('drama')}
+      >
+        <Ionicons 
+          name="film" 
+          size={20} 
+          color={activeTab === 'drama' ? '#fff' : '#007bff'} 
+        />
+        <Text 
+          style={[styles.tabText, activeTab === 'drama' && styles.activeTabText]}
+        >
+          Dramas ({dramas.length})
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+  
   const renderHeader = () => {
     return (
       <>
@@ -345,10 +420,18 @@ const Profile = ({ navigation }) => {
         </View>
         
         <View style={styles.favoritesContainer}>
-          <Text style={styles.sectionTitle}>Favorite Anime</Text>
-          {favorites.length === 0 && (
+          <Text style={styles.sectionTitle}>My Favorites</Text>
+          {renderFavoritesTabs()}
+          
+          {activeTab === 'anime' && favorites.length === 0 && (
             <Text style={styles.emptyMessage}>
-              No favorites yet. Discover anime and add them to your favorites!
+              No anime favorites yet. Discover anime and add them to your favorites!
+            </Text>
+          )}
+          
+          {activeTab === 'drama' && dramas.length === 0 && (
+            <Text style={styles.emptyMessage}>
+              No drama favorites yet. Discover dramas and add them to your favorites!
             </Text>
           )}
         </View>
@@ -356,31 +439,35 @@ const Profile = ({ navigation }) => {
     );
   };
 
-  if (loading) {
+  // Render the profile screen content
+  if (loading && !userData) {
     return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
-      </View>
+      <LoadingModal
+        visible={true}
+        message="Loading profile..."
+      />
     );
   }
 
   return (
     <View style={styles.container}>
-      {favorites.length > 0 ? (
+      {activeTab === 'anime' ? (
         <FlatList
           data={favorites}
           keyExtractor={(item) => item.clientKey || `favorite_${item.mal_id}_${Math.random().toString(36).substring(2,11)}`}
-          renderItem={renderFavoriteItem}
+          renderItem={renderAnimeItem}
           ListHeaderComponent={renderHeader}
           contentContainerStyle={styles.listContent}
+          ListEmptyComponent={null}
         />
       ) : (
         <FlatList
-          data={[]}
-          keyExtractor={() => "empty"}
-          renderItem={() => null}
+          data={dramas}
+          keyExtractor={(item) => item.clientKey || `drama_${item.id}_${Math.random().toString(36).substring(2,11)}`}
+          renderItem={renderDramaItem}
           ListHeaderComponent={renderHeader}
           contentContainerStyle={styles.listContent}
+          ListEmptyComponent={null}
         />
       )}
     </View>
@@ -504,7 +591,7 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     color: '#333',
   },
-  animeCard: {
+  contentCard: {
     flexDirection: 'row',
     backgroundColor: '#fff',
     borderRadius: 8,
@@ -512,21 +599,21 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     elevation: 2,
   },
-  animeImage: {
+  contentImage: {
     width: 100,
     height: 150,
   },
-  animeInfo: {
+  contentInfo: {
     flex: 1,
     padding: 12,
     justifyContent: 'space-between',
   },
-  animeTitle: {
+  contentTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     marginBottom: 5,
   },
-  animeDetail: {
+  contentDetail: {
     fontSize: 14,
     color: '#555',
     marginBottom: 3,
@@ -542,6 +629,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 16,
     color: '#666',
+    marginTop: 20,
   },
   loader: {
     marginTop: 50,
@@ -626,6 +714,35 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 16,
     marginLeft: 8,
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    borderRadius: 8,
+    marginBottom: 10,
+    marginTop: 5,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#007bff',
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    backgroundColor: '#fff',
+  },
+  activeTabButton: {
+    backgroundColor: '#007bff',
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#007bff',
+    marginLeft: 8,
+  },
+  activeTabText: {
+    color: '#fff',
   },
 });
 

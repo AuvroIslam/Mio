@@ -1,4 +1,4 @@
-import { doc, setDoc, getDoc, query, collection, getDocs, where, orderBy, startAfter, limit as fbLimit } from 'firebase/firestore';
+import { doc, setDoc, getDoc, query, collection, getDocs, where, orderBy, startAfter, limit as fbLimit, writeBatch, increment, serverTimestamp } from 'firebase/firestore';
 import { db } from '../config/firebaseConfig';
 import firestoreService from './firestoreService';
 
@@ -12,60 +12,149 @@ const SUBSCRIPTION_LIMITS = {
   }
 };
 
+// Constants for match threshold
+const MATCH_THRESHOLD = {
+  ANIME: 3, // Need at least 3 common anime to match
+  DRAMA: 3  // Need at least 3 common dramas to match
+};
+
 /**
  * Creates a bidirectional match between two users, respecting subscription limits
  * @param {string} userId - Current user ID
  * @param {string} otherUserId - ID of the user to match with
  */
-const createBidirectionalMatch = async (userId, otherUserId) => {
+export const createBidirectionalMatch = async (userAId, userBId) => {
   try {
-    // First check if both users are available for matching
-    const userAvailabilityResponse = await firestoreService.checkAndResetCooldown(userId);
-    const otherUserAvailabilityResponse = await firestoreService.checkAndResetCooldown(otherUserId);
+    // Define match thresholds
+    const ANIME_MATCH_THRESHOLD = 3; // Need at least 3 common anime to match
+    const DRAMA_MATCH_THRESHOLD = 3; // Need at least 3 common dramas to match
+
+    console.log(`Creating bidirectional match between ${userAId} and ${userBId}`);
     
-    // If either user has a cooldown and isn't available, don't create the match
-    if (!userAvailabilityResponse.success || !userAvailabilityResponse.availableForMatching) {
-      return {
-        success: false,
-        error: 'User has reached their match limit for the week'
+    // Check if both users are available for matching
+    const userARef = doc(db, 'users', userAId);
+    const userBRef = doc(db, 'users', userBId);
+    
+    const [userADoc, userBDoc] = await Promise.all([
+      getDoc(userARef),
+      getDoc(userBRef)
+    ]);
+    
+    if (!userADoc.exists() || !userBDoc.exists()) {
+      return { success: false, error: 'One or both user profiles not found' };
+    }
+    
+    const userA = userADoc.data();
+    const userB = userBDoc.data();
+    
+    // Check if users are available for matching
+    if (userA.availableForMatching === false || userB.availableForMatching === false) {
+      return { success: false, error: 'One or both users are not available for matching' };
+    }
+    
+    // Get the anime arrays from both users
+    const userAAnime = userA.animes || [];
+    const userBAnime = userB.animes || [];
+    
+    // Get the drama arrays from both users
+    const userADramas = userA.dramas || [];
+    const userBDramas = userB.dramas || [];
+    
+    // Count how many common anime they have
+    const commonAnime = userAAnime.filter(animeId => userBAnime.includes(animeId));
+    const animeMatchCount = commonAnime.length;
+    
+    // Count how many common dramas they have
+    const commonDramas = userADramas.filter(dramaId => userBDramas.includes(dramaId));
+    const dramaMatchCount = commonDramas.length;
+    
+    console.log(`Common anime: ${animeMatchCount}, Common dramas: ${dramaMatchCount}`);
+    
+    // Determine if they have enough common interests to match
+    const hasAnimeMatch = animeMatchCount >= ANIME_MATCH_THRESHOLD;
+    const hasDramaMatch = dramaMatchCount >= DRAMA_MATCH_THRESHOLD;
+    
+    // If neither threshold is met, don't create a match
+    if (!hasAnimeMatch && !hasDramaMatch) {
+      return { 
+        success: false, 
+        error: 'Insufficient common interests',
+        details: {
+          animeCount: animeMatchCount,
+          dramaCount: dramaMatchCount,
+          animeThreshold: ANIME_MATCH_THRESHOLD,
+          dramaThreshold: DRAMA_MATCH_THRESHOLD
+        }
       };
     }
     
-    if (!otherUserAvailabilityResponse.success || !otherUserAvailabilityResponse.availableForMatching) {
-      return {
-        success: false,
-        error: 'Other user has reached their match limit for the week'
-      };
+    // Determine match type
+    let matchType = '';
+    if (hasAnimeMatch && hasDramaMatch) {
+      matchType = 'both';
+    } else if (hasAnimeMatch) {
+      matchType = 'anime';
+    } else {
+      matchType = 'drama';
     }
     
-    // Create the match in both users' documents
-    const userMatchRef = doc(db, 'users', userId, 'matches', otherUserId);
-    const otherUserMatchRef = doc(db, 'users', otherUserId, 'matches', userId);
+    // Create match documents
+    const matchId = `${userAId}_${userBId}`;
+    const reverseMatchId = `${userBId}_${userAId}`;
     
-    // Create the match document
-    await setDoc(userMatchRef, {
-      matchedAt: new Date().toISOString(),
-      userId: otherUserId
+    const matchData = {
+      users: [userAId, userBId],
+      commonAnimeCount: animeMatchCount,
+      commonDramaCount: dramaMatchCount,
+      matchType: matchType,
+      matchStrength: animeMatchCount + dramaMatchCount, // Combined strength
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      lastMessageAt: null,
+      messageCount: 0,
+      unreadCounts: {
+        [userAId]: 0,
+        [userBId]: 0
+      }
+    };
+    
+    // Create the match documents in a batch
+    const batch = writeBatch(db);
+    
+    // First match document (userA → userB)
+    batch.set(doc(db, 'matches', matchId), matchData);
+    
+    // Second match document (userB → userA)
+    batch.set(doc(db, 'matches', reverseMatchId), matchData);
+    
+    // Update user match counts
+    batch.update(userARef, {
+      matchCount: increment(1),
+      updatedAt: serverTimestamp()
     });
     
-    await setDoc(otherUserMatchRef, {
-      matchedAt: new Date().toISOString(),
-      userId: userId
+    batch.update(userBRef, {
+      matchCount: increment(1),
+      updatedAt: serverTimestamp()
     });
     
-    // Process the match and update match counts for both users
-    await firestoreService.processMatch(userId, otherUserId);
+    // Commit the batch
+    await batch.commit();
     
-    return {
-      success: true,
-      message: 'Match created successfully'
+    console.log(`Match created successfully between ${userAId} and ${userBId}`);
+    
+    return { 
+      success: true, 
+      matchType: matchType,
+      details: {
+        animeCount: animeMatchCount,
+        dramaCount: dramaMatchCount,
+        totalStrength: animeMatchCount + dramaMatchCount
+      }
     };
   } catch (error) {
-    console.error('Error creating bidirectional match:', error);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('Error creating match:', error);
+    return { success: false, error: error.message };
   }
 };
 

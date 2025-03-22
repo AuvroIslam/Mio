@@ -11,13 +11,15 @@ import {
 import { useAuth } from '../config/AuthContext';
 import { auth } from '../config/firebaseConfig';
 import firestoreService from '../services/firestoreService';
+import useTimer from '../hooks/useTimer';
 
 const Login = ({ navigation }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   
-  const { login, resetPassword } = useAuth();
+  const { login, resetPassword, forgotPassword } = useAuth();
+  const timer = useTimer();
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -33,7 +35,7 @@ const Login = ({ navigation }) => {
       const userCredential = await login(email, password);
       console.log('LOGIN SUCCESSFUL - USER:', userCredential.user.uid);
       
-      setTimeout(async () => {
+      timer.setTimeout(async () => {
         try {
           if (auth.currentUser) {
             console.log('CHECKING SUBSCRIPTION DATA AFTER LOGIN');
@@ -62,9 +64,9 @@ const Login = ({ navigation }) => {
             console.log('==========================================');
           }
         } catch (error) {
-          console.error('Error checking subscription data:', error);
+          console.error('Error checking subscription after login:', error);
         }
-      }, 1000);
+      }, 1000, 'login_check');
       
     } catch (error) {
       let errorMessage = 'Failed to login';

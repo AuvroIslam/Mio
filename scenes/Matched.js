@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import { useSubscription } from '../config/SubscriptionContext';
 import firestoreService from '../services/firestoreService';
+import useTimer from '../hooks/useTimer';
+import LoadingModal from '../components/LoadingModal';
 
 const Matched = ({ navigation }) => {
   const [matchedUsers, setMatchedUsers] = useState([]);
@@ -29,6 +31,7 @@ const Matched = ({ navigation }) => {
   const [matchCooldownActive, setMatchCooldownActive] = useState(false);
   const [matchCooldownTime, setMatchCooldownTime] = useState('00:00');
   const [searchingMatch, setSearchingMatch] = useState(false);
+  const timer = useTimer();
 
   useEffect(() => {
     const loadData = async () => {
@@ -91,31 +94,29 @@ const Matched = ({ navigation }) => {
   };
   
   // Update cooldown status and start timer if needed
-  const updateCooldownStatus = (cooldownStartedAt) => {
+  const updateCooldownStatus = useCallback((cooldownStartedAt) => {
     if (!cooldownStartedAt) {
       setMatchCooldownActive(false);
-      setMatchCooldownTime('00:00');
       return;
     }
     
     setMatchCooldownActive(true);
     setMatchCooldownTime(formatMatchCooldownTime(cooldownStartedAt));
     
-    // Set up a timer to update the cooldown time
-    const timerId = setInterval(() => {
+    // Set up a timer to update the cooldown time using our custom hook
+    const timerKey = timer.setInterval(() => {
       const timeRemaining = formatMatchCooldownTime(cooldownStartedAt);
       setMatchCooldownTime(timeRemaining);
       
       // If cooldown ended, reset and refresh
       if (timeRemaining === 'Ready!') {
-        clearInterval(timerId);
+        timer.clearTimer(timerKey);
         checkAndResetCooldown();
       }
-    }, 1000);
+    }, 1000, 'match_cooldown');
     
-    // Clear timer on cleanup
-    return () => clearInterval(timerId);
-  };
+    // Our custom hook handles cleanup automatically
+  }, [formatMatchCooldownTime, checkAndResetCooldown, timer]);
   
   // Check and reset cooldown if expired
   const checkAndResetCooldown = async () => {
@@ -419,7 +420,10 @@ const Matched = ({ navigation }) => {
       {renderMatchStatus()}
       
       {loading ? (
-        <ActivityIndicator size="large" color="#007bff" style={styles.loader} />
+        <LoadingModal
+          visible={true}
+          message="Loading matches..."
+        />
       ) : (
         <FlatList
           data={matchedUsers}

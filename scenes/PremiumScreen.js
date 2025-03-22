@@ -5,11 +5,13 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  ActivityIndicator
+  ActivityIndicator,
+  Alert
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSubscription } from '../config/SubscriptionContext';
 import PremiumBanner from '../assets/premium-banner';
+import LoadingModal from '../components/LoadingModal';
 
 const PremiumScreen = ({ navigation }) => {
   const { 
@@ -29,10 +31,10 @@ const PremiumScreen = ({ navigation }) => {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007bff" />
-        <Text style={styles.loadingText}>Loading subscription info...</Text>
-      </View>
+      <LoadingModal
+        visible={true}
+        message="Loading subscription info..."
+      />
     );
   }
 

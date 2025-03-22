@@ -18,7 +18,7 @@ service cloud.firestore {
       allow update: if request.auth != null && 
                      request.auth.uid == userId && 
                      request.resource.data.diff(resource.data).affectedKeys()
-                       .hasAny(['subscription', 'subscriptionData', 'weeklyStats', 'lastResetDate', 'favorites']);
+                       .hasAny(['subscription', 'subscriptionData', 'weeklyStats', 'lastResetDate', 'favorites', 'dramas', 'dramasData']);
       
       // Allow creation only by the user themselves
       allow create: if request.auth != null && request.auth.uid == userId;
@@ -72,6 +72,19 @@ service cloud.firestore {
       
       // Simplified rules for writes - allow any authenticated user to update the users array
       // This is necessary for adding/removing users from anime favorites
+      allow create, update: if request.auth != null;
+      
+      // Allow deletion of documents (when no users are left)
+      allow delete: if request.auth != null;
+    }
+    
+    // DramaUsers Collection (reverse index)
+    match /dramaUsers/{dramaId} {
+      // Anyone authenticated can read
+      allow read: if request.auth != null;
+      
+      // Simplified rules for writes - allow any authenticated user to update the users array
+      // This is necessary for adding/removing users from drama favorites
       allow create, update: if request.auth != null;
       
       // Allow deletion of documents (when no users are left)

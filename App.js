@@ -1,150 +1,53 @@
-import 'react-native-gesture-handler';
 import React, { useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
-import { AuthProvider, useAuth } from './config/AuthContext';
-import { FavoritesProvider } from './config/FavoritesContext';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { enableScreens } from 'react-native-screens';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { AuthProvider } from './config/AuthContext';
 import { SubscriptionProvider } from './config/SubscriptionContext';
-import firestoreService from './services/firestoreService';
-import Login from './scenes/login';
-import Signup from './scenes/signup';
-import RegisterPage from './scenes/RegisterPage';
-import AppNavigator from './components/Navigation';
+import { FavoritesProvider } from './config/FavoritesContext';
+import { DramaProvider } from './config/DramaContext';
+import Navigation from './components/Navigation';
+import { View } from 'react-native';
 
-const Stack = createStackNavigator();
+// Enable screens for better navigation performance
+enableScreens();
 
-// Auth Navigator - shown when user is NOT authenticated
-const AuthStack = () => {
-  return (
-    <Stack.Navigator initialRouteName="Login">
-      <Stack.Screen 
-        name="Login" 
-        component={Login} 
-        options={{ headerShown: false }}
-      />
-      <Stack.Screen 
-        name="Signup" 
-        component={Signup}
-        options={{ headerShown: false }}
-      />
-    </Stack.Navigator>
-  );
-};
-
-// Root component that handles authentication state
-const RootNavigator = () => {
-  const { currentUser, loading, isNewUser, checkingAuth } = useAuth();
-  const [isProfileComplete, setIsProfileComplete] = useState(false);
-  const [checkingProfile, setCheckingProfile] = useState(true);
-
-  // Check if user has completed profile setup
-  useEffect(() => {
-    const checkProfileStatus = async () => {
-      console.log(`Checking profile status: currentUser=${!!currentUser}, isNewUser=${isNewUser}`);
-      
-      if (currentUser) {
-        try {
-          // For returning users (not new users), skip profile check
-          if (!isNewUser) {
-            console.log("Existing user login - skipping detailed profile check");
-            setIsProfileComplete(true);
-            setCheckingProfile(false);
-            return;
-          }
-
-          // For new users, check if profile exists in Firestore
-          console.log("New user - checking if profile exists");
-          const userProfile = await firestoreService.getUserProfile(currentUser.uid);
-          
-          const isComplete = userProfile.success && 
-                          userProfile.data && 
-                          (userProfile.data.profileComplete ||
-                          (userProfile.data.userName && 
-                          userProfile.data.age && 
-                          userProfile.data.gender));
-          
-          console.log("Profile complete check result:", isComplete);
-          setIsProfileComplete(isComplete);
-        } catch (error) {
-          console.error("Error checking profile:", error);
-          setIsProfileComplete(false);
-        }
-      } else {
-        // No user logged in
-        setIsProfileComplete(false);
-      }
-      
-      setCheckingProfile(false);
-    };
-
-    checkProfileStatus();
-  }, [currentUser, isNewUser]);
-  
-  // Determine which screen to show
-  const renderMainContent = () => {
-    // Still loading auth state
-    if (loading || checkingAuth || checkingProfile) {
-      return (
-        <View style={loadingStyles.container}>
-          <ActivityIndicator size="large" color="#007bff" />
-          <Text style={loadingStyles.text}>Loading...</Text>
-        </View>
-      );
-    }
-    
-    // User is authenticated
-    if (currentUser) {
-      // Profile is complete - show main app
-      if (isProfileComplete) {
-        return <AppNavigator />;
-      }
-      
-      // Profile is incomplete - show registration
-      return (
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="RegisterProfile" component={RegisterPage} />
-        </Stack.Navigator>
-      );
-    }
-    
-    // Not authenticated - show login/signup
-    return <AuthStack />;
-  };
-  
-  return (
-    <NavigationContainer>
-      <StatusBar style="auto" />
-      {renderMainContent()}
-    </NavigationContainer>
-  );
-};
-
-// Loading screen styles
-const loadingStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-  },
-  text: {
-    marginTop: 16,
-    fontSize: 16,
-    color: '#6c757d',
-  },
-});
-
-// Main App component with providers
+// Main app component
 export default function App() {
+  const [appIsReady, setAppIsReady] = useState(false);
+
+  useEffect(() => {
+    // Simple initialization
+    setTimeout(() => {
+      setAppIsReady(true);
+    }, 500);
+  }, []);
+
+  if (!appIsReady) {
+    return null;
+  }
+
+  // Wrap the app with all required context providers
   return (
-    <AuthProvider>
-      <SubscriptionProvider>
-        <FavoritesProvider>
-          <RootNavigator />
-        </FavoritesProvider>
-      </SubscriptionProvider>
-    </AuthProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <View style={{ flex: 1 }}>
+          <StatusBar style="auto" />
+          <AuthProvider>
+            <SubscriptionProvider>
+              <FavoritesProvider>
+                <DramaProvider>
+                  <NavigationContainer>
+                    <Navigation />
+                  </NavigationContainer>
+                </DramaProvider>
+              </FavoritesProvider>
+            </SubscriptionProvider>
+          </AuthProvider>
+        </View>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

@@ -27,7 +27,13 @@ export const FavoritesProvider = ({ children }) => {
     resetFavoritesCount, 
     recordFavoriteChange, 
     canMakeChange,
-    usageStats // Access the usageStats directly from SubscriptionContext
+    usageStats,
+    decrementFavoritesCount,
+    incrementFavoritesCount,
+    isInCooldown,
+    canAddFavorite,
+    canRemoveFavorite,
+    refreshCountsFromFirestore
   } = useSubscription();
 
   // Max counts based on subscription
@@ -44,9 +50,10 @@ export const FavoritesProvider = ({ children }) => {
 
   // Keep subscription context updated with our local state
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && resetFavoritesCount) {
       resetFavoritesCount(favorites.length);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [favorites, currentUser]);
 
   // Function to load favorites from Firestore
@@ -71,16 +78,45 @@ export const FavoritesProvider = ({ children }) => {
         }));
         
         setFavorites(favoritesWithClientKey);
+        
+        // Explicitly sync the count with Firestore
+        syncFavoriteCount(favoritesWithClientKey.length);
       } else {
         setFavorites([]);
+        // Reset count to 0 if no favorites
+        syncFavoriteCount(0);
       }
+      
+      // Also refresh all counts from Firestore
+      await refreshCountsFromFirestore(true);
       
       console.log(`Loaded data: ${userFavorites?.length || 0} favorites, weekly changes: ${weeklyChangesCount}/${maxWeeklyChanges}`);
     } catch (error) {
       console.error('Error loading favorites:', error);
       setFavorites([]);
+      syncFavoriteCount(0);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Function to explicitly sync the favorite count with Firestore
+  const syncFavoriteCount = async (count) => {
+    if (!currentUser) return;
+    
+    console.log(`Syncing favorite count in Firestore: ${count}`);
+    try {
+      // Update local state in subscription context
+      if (resetFavoritesCount) {
+        resetFavoritesCount(count);
+      }
+      
+      // Update Firestore directly to ensure consistency
+      await firestoreService.updateFavoriteCount(currentUser.uid, count);
+      
+      // Don't refresh after every sync
+    } catch (error) {
+      console.error('Error syncing favorite count:', error);
     }
   };
 
@@ -102,23 +138,40 @@ export const FavoritesProvider = ({ children }) => {
       return false;
     }
 
-    // Check if we've reached the favorites limit
-    if (favorites.length >= maxFavorites) {
-      Alert.alert(
-        'Favorites Limit Reached', 
-        `You can have up to ${maxFavorites} favorites with your current plan.${!isPremium ? ' Upgrade to premium for more!' : ''}`
-      );
-      return false;
-    }
-
     // If already processing, don't allow another operation
     if (processingFavorite) {
       return false;
     }
 
-    // Adding anime is always free, we don't count it against the weekly changes
+    // Set processing flag before doing any async work
+    setProcessingFavorite(true);
+
     try {
-      setProcessingFavorite(true);
+      // Refresh counts from Firestore before checking limits, but skip loading
+      await refreshCountsFromFirestore(true);
+      
+      // Get the current accurate count
+      const currentFavoritesCount = favorites.length;
+      console.log(`Current favorites count: ${currentFavoritesCount}, max allowed: ${maxFavorites}, usageStats.favoritesCount: ${usageStats.favoritesCount}`);
+      
+      if (currentFavoritesCount >= maxFavorites && !isPremium) {
+        Alert.alert(
+          'Favorites Limit Reached', 
+          `You can only have ${maxFavorites} favorites with a free account. Upgrade to premium for unlimited favorites!`,
+          [
+            { text: 'OK' },
+            { 
+              text: 'Upgrade to Premium', 
+              onPress: () => {
+                const route = navigateToPremiumScreen();
+                console.log(`Navigation to ${route} requested but can't be performed from context`);
+              } 
+            }
+          ]
+        );
+        console.log("Could not add to favorites - reached limit of " + maxFavorites);
+        return false;
+      }
       
       // Add a unique clientKey for React
       const animeWithClientKey = {
@@ -131,9 +184,24 @@ export const FavoritesProvider = ({ children }) => {
       setFavorites(updatedFavorites);
       
       // Then save to Firestore
-      await firestoreService.addFavorite(currentUser.uid, anime);
+      const result = await firestoreService.addFavorite(currentUser.uid, anime);
       
+      if (result.success) {
+        // Only update counts if the operation was successful
+        await syncFavoriteCount(updatedFavorites.length);
+        
+        // After successful operation, refresh counts in background
+        setTimeout(() => {
+          refreshCountsFromFirestore(true);
+        }, 500);
+        
+        console.log(`Successfully added anime ${anime.mal_id} to favorites. New count: ${updatedFavorites.length}`);
       return true;
+      } else {
+        // If Firestore update fails, revert local state
+        setFavorites(favorites);
+        throw new Error(result.error || 'Failed to add to favorites');
+      }
     } catch (error) {
       console.error('Error adding to favorites:', error);
       
@@ -149,76 +217,216 @@ export const FavoritesProvider = ({ children }) => {
 
   // Function to remove an anime from favorites
   const removeFromFavorites = async (animeId) => {
-    console.log('==========================================');
-    console.log('REMOVE FROM FAVORITES CALLED FOR ANIME:', animeId);
+    console.log(`[FavoritesContext] Attempting to remove anime ${animeId} from favorites`);
+    
+    if (processingFavorite) {
+      console.log('[FavoritesContext] Already processing another anime operation');
+      return false;
+    }
     
     if (!currentUser) {
-      console.log('NO USER LOGGED IN - CANCELLING');
-      console.log('==========================================');
-      Alert.alert('Login Required', 'Please login to manage favorites');
+      console.log('[FavoritesContext] No current user, cannot remove favorite');
       return false;
     }
 
-    // Check if already in favorites
+    // Check if the anime exists in favorites
     if (!isInFavorites(animeId)) {
-      console.log('ANIME NOT IN FAVORITES - CANCELLING');
-      console.log('==========================================');
-      Alert.alert('Not in Favorites', 'This anime is not in your favorites');
+      console.log(`[FavoritesContext] Anime ${animeId} not found in favorites`);
       return false;
     }
 
-    // Check if user can make changes (using the subscription context's logic)
-    if (!canMakeChange()) {
-      console.log('USER CANNOT MAKE CHANGES - COOLDOWN IS ACTIVE');
-      console.log('USAGE STATS:', usageStats);
-      console.log('==========================================');
-      // The actual error message will be handled by the UI component
-      return false;
-    }
-
-    // If already processing, don't allow another operation
-    if (processingFavorite) {
-      console.log('ALREADY PROCESSING A FAVORITE - CANCELLING');
-      console.log('==========================================');
-      return false;
-    }
-
+    // Set processing flag before any async work
+    setProcessingFavorite(true);
+    
     try {
-      console.log('STARTING REMOVAL PROCESS');
-      setProcessingFavorite(true);
+      // Refresh counts from Firestore before checking limits, skip loading
+      await refreshCountsFromFirestore(true);
       
-      // First update the state optimistically (remove the anime from favorites)
-      const updatedFavorites = favorites.filter(favorite => favorite.mal_id !== animeId);
+      // For free users, check if they're allowed to make changes
+      if (!isPremium) {
+        // Check if user is in cooldown
+        if (isInCooldown()) {
+          const remainingTime = useSubscription().getFormattedTimeRemaining();
+          Alert.alert(
+            'Cooldown Active',
+            `You are currently in a cooldown period. Please wait ${remainingTime} before removing more favorites, or upgrade to premium for unlimited changes.`,
+            [
+              { text: 'OK' },
+              { 
+                text: 'Upgrade to Premium', 
+                onPress: () => {
+                  const route = navigateToPremiumScreen();
+                  console.log(`Navigation to ${route} requested but can't be performed from context`);
+                } 
+              }
+            ]
+          );
+          setProcessingFavorite(false);
+      return false;
+    }
+
+        // Check if user has reached weekly limit
+        if (weeklyChangesCount >= maxWeeklyChanges) {
+          Alert.alert(
+            'Weekly Limit Reached',
+            `You have reached your weekly limit of ${maxWeeklyChanges} changes. Upgrade to premium for unlimited changes!`,
+            [
+              { text: 'OK' },
+              { 
+                text: 'Upgrade to Premium', 
+                onPress: () => {
+                  const route = navigateToPremiumScreen();
+                  console.log(`Navigation to ${route} requested but can't be performed from context`);
+                } 
+              }
+            ]
+          );
+          setProcessingFavorite(false);
+          return false;
+        }
+      }
+
+      // Store original state for rollback
+      const originalFavorites = [...favorites];
+      const animeToRemove = favorites.find(anime => anime.mal_id === animeId);
+      
+      if (!animeToRemove) {
+        console.log(`[FavoritesContext] Could not find anime with ID ${animeId} in favorites array`);
+        setProcessingFavorite(false);
+      return false;
+    }
+
+      console.log(`[FavoritesContext] Found anime to remove: ${animeToRemove.title || 'Untitled'} (ID: ${animeId})`);
+      
+      // First update local state (optimistic update)
+      const updatedFavorites = favorites.filter(anime => anime.mal_id !== animeId);
       setFavorites(updatedFavorites);
-      console.log('LOCAL STATE UPDATED - FAVORITES COUNT:', updatedFavorites.length);
       
-      // Then remove from Firestore
-      console.log('REMOVING FROM FIRESTORE');
-      await firestoreService.removeAnimeFromFavorites(currentUser.uid, animeId);
-      console.log('REMOVED FROM FIRESTORE SUCCESSFULLY');
+      // Convert animeId to number if it's a string to ensure consistent handling
+      const normalizedAnimeId = typeof animeId === 'string' ? parseInt(animeId, 10) : animeId;
+      console.log(`[FavoritesContext] Using normalized animeId: ${normalizedAnimeId} (${typeof normalizedAnimeId})`);
       
-      // Record the change in subscription context
-      console.log('RECORDING FAVORITE CHANGE FOR COOLDOWN');
-      await recordFavoriteChange();
+      // Remove from Firestore
+      console.log(`[FavoritesContext] Calling firestoreService.removeAnimeFromFavorites(${currentUser.uid}, ${normalizedAnimeId})`);
+      const result = await firestoreService.removeAnimeFromFavorites(currentUser.uid, normalizedAnimeId);
+      console.log(`[FavoritesContext] Firestore remove result:`, result);
       
-      // Log to console for debugging
-      console.log(`REMOVAL COMPLETE - Weekly changes now: ${usageStats.changesThisWeek}/${maxWeeklyChanges}`);
-      console.log('==========================================');
+      if (!result || !result.success) {
+        // If Firestore update fails, revert local state
+        console.error('[FavoritesContext] Firestore removal failed, reverting to original state');
+        setFavorites(originalFavorites);
+        
+        const errorMsg = result?.error || 'Unknown error';
+        console.error(`[FavoritesContext] Failed to remove favorite: ${errorMsg}`);
+        Alert.alert('Error', errorMsg || 'Failed to remove from favorites');
+        return false;
+      }
       
+      // Double-check that the anime was actually removed from Firestore
+      console.log('[FavoritesContext] Verifying removal from Firestore...');
+      const currentFavorites = await firestoreService.getUserFavorites(currentUser.uid);
+      const stillExists = currentFavorites.some(anime => anime.mal_id === animeId);
+      
+      if (stillExists) {
+        console.error(`[FavoritesContext] Anime ${animeId} still exists in Firestore despite successful removal operation!`);
+        console.log('[FavoritesContext] Attempting second removal...');
+        
+        // Try a second removal
+        const secondResult = await firestoreService.removeAnimeFromFavorites(currentUser.uid, normalizedAnimeId);
+        
+        if (!secondResult || !secondResult.success) {
+          console.error('[FavoritesContext] Second removal attempt failed');
+          // If second attempt fails, sync with Firestore state anyway
+          setFavorites(currentFavorites.map(anime => ({
+            ...anime,
+            clientKey: `${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2,11)}`
+          })));
+          Alert.alert('Warning', 'Could not remove anime from favorites. Please try again later.');
+          return false;
+        }
+        
+        // After second attempt, check again
+        const verifiedFavorites = await firestoreService.getUserFavorites(currentUser.uid);
+        const stillExistsAfterSecondAttempt = verifiedFavorites.some(anime => anime.mal_id === animeId);
+        
+        if (stillExistsAfterSecondAttempt) {
+          console.error('[FavoritesContext] Anime still exists after second removal attempt!');
+          // Sync with Firestore state
+          setFavorites(verifiedFavorites.map(anime => ({
+            ...anime,
+            clientKey: `${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2,11)}`
+          })));
+          Alert.alert('Warning', 'Could not remove anime from favorites due to sync issues. Please try again later.');
+          return false;
+        } else {
+          // Second attempt succeeded
+          console.log('[FavoritesContext] Second removal attempt succeeded');
+          // Update our local state to match verified Firestore state
+          setFavorites(verifiedFavorites.map(anime => ({
+            ...anime,
+            clientKey: `${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2,11)}`
+          })));
+        }
+      } else {
+        console.log(`[FavoritesContext] Verified: Anime ${animeId} successfully removed from Firestore`);
+        // Update our local state to match verified Firestore state for consistency
+        setFavorites(currentFavorites.map(anime => ({
+          ...anime,
+          clientKey: `${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2,11)}`
+        })));
+      }
+      
+      // Get the new actual count from Firestore
+      const updatedFavoritesFromFirestore = await firestoreService.getUserFavorites(currentUser.uid);
+      const actualFavoriteCount = updatedFavoritesFromFirestore.length;
+      
+      // Update the count in Firestore to ensure consistency
+      console.log(`[FavoritesContext] Updating count in Firestore to match actual count: ${actualFavoriteCount}`);
+      await syncFavoriteCount(actualFavoriteCount);
+      
+      // Record the favorite change for cooldown tracking (only for free users)
+      if (!isPremium) {
+        console.log('[FavoritesContext] Recording favorite change for cooldown tracking');
+        const recordResult = await recordFavoriteChange();
+        console.log(`[FavoritesContext] Favorite change recorded, result: ${recordResult}, current counter: ${usageStats.changesThisWeek}`);
+      }
+      
+      // After successful operation, refresh counts in background
+      setTimeout(() => {
+        refreshCountsFromFirestore(true);
+      }, 500);
+      
+      console.log(`[FavoritesContext] Anime ${animeId} successfully removed from favorites. New count: ${actualFavoriteCount}`);
       return true;
     } catch (error) {
-      console.error('Error removing from favorites:', error);
+      // If error occurs, revert local state
+      console.error('[FavoritesContext] Error removing from favorites:', error);
       
-      // Rollback the state change if the operation failed
-      setFavorites(favorites);
+      // Try to recover - first get current favorites from Firestore
+      try {
+        console.log('[FavoritesContext] Attempting recovery by fetching current Firestore state');
+        const currentFavorites = await firestoreService.getUserFavorites(currentUser.uid);
+        setFavorites(currentFavorites.map(anime => ({
+          ...anime,
+          clientKey: `${anime.mal_id}_${Date.now()}_${Math.random().toString(36).substring(2,11)}`
+        })));
+        console.log('[FavoritesContext] Recovery complete, favorites reset to Firestore state');
+      } catch (recoveryError) {
+        console.error('[FavoritesContext] Recovery failed:', recoveryError);
+        // If recovery fails, reset to an empty array to be safe
+        setFavorites([]);
+      }
       
-      Alert.alert('Error', 'Failed to remove from favorites');
-      console.log('ERROR REMOVING FROM FAVORITES:', error.message);
-      console.log('==========================================');
+      Alert.alert('Error', 'Failed to remove from favorites. Please try again.');
       return false;
     } finally {
       setProcessingFavorite(false);
     }
+  };
+
+  // Ensure we have a navigate function available
+  const navigateToPremiumScreen = () => {
+    return 'Subscription';
   };
 
   // Create context value object

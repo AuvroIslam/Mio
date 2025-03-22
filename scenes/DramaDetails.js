@@ -12,37 +12,31 @@ import {
   Modal
 } from 'react-native';
 import { useAuth } from '../config/AuthContext';
-import { useFavorites } from '../config/FavoritesContext';
+import { useDramas } from '../config/DramaContext';
 import { useSubscription } from '../config/SubscriptionContext';
 import LoadingModal from '../components/LoadingModal';
 import Icon from '../components/Icon';
 import useTimer from '../hooks/useTimer';
 
 const { width } = Dimensions.get('window');
+const TMDB_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/';
+const TMDB_API_KEY = 'b2b68cd65cf02c8da091b2857084bd4d';
 
-const AnimeDetails = ({ route, navigation }) => {
-  const { anime } = route.params;
+const DramaDetails = ({ route, navigation }) => {
+  const { drama } = route.params;
   const [loading, setLoading] = useState(false);
-  const [animeDetails, setAnimeDetails] = useState(null);
+  const [dramaDetails, setDramaDetails] = useState(null);
   const [countdown, setCountdown] = useState('');
   const [countdownInitialized, setCountdownInitialized] = useState(false);
   const { currentUser } = useAuth();
-  const { isInFavorites, addToFavorites, removeFromFavorites, processingFavorite } = useFavorites();
-  const { 
-    canMakeChange, 
-    getFormattedTimeRemaining, 
-    isInCooldown, 
-    usageStats, 
-    getRemainingCounts, 
-    navigateToPremiumUpgrade,
-    loading: subscriptionLoading 
-  } = useSubscription();
+  const { isInDramas, addToDramas, removeFromDramas, processingDrama, dramas } = useDramas();
+  const { canMakeChange, getFormattedTimeRemaining, isInCooldown, usageStats, canAddDrama, canRemoveFavorite, loading: subscriptionLoading } = useSubscription();
+  
+  // Determine if drama is in favorites
+  const isFavorite = isInDramas(drama.id);
   
   // Use our custom timer hook
-  const { setInterval, clearTimer } = useTimer();
-  
-  // Determine if anime is in favorites
-  const isFavorite = isInFavorites(anime.mal_id);
+  const timer = useTimer();
   
   // Countdown timer effect
   useEffect(() => {
@@ -61,9 +55,9 @@ const AnimeDetails = ({ route, navigation }) => {
       setCountdown(getFormattedTimeRemaining());
       
       // Start the countdown timer to update every second
-      timerKey = setInterval(() => {
+      timerKey = timer.setInterval(() => {
         setCountdown(getFormattedTimeRemaining());
-      }, 1000, 'anime_countdown');
+      }, 1000, 'drama_countdown');
     } else {
       // No countdown needed, but we're still initialized
       setCountdown('');
@@ -71,47 +65,47 @@ const AnimeDetails = ({ route, navigation }) => {
     }
     
     return () => {
-      if (timerKey) clearTimer(timerKey);
+      if (timerKey) timer.clearTimer(timerKey);
     };
-  }, [usageStats.counterStartedAt, getFormattedTimeRemaining, setInterval, clearTimer, subscriptionLoading]);
+  }, [usageStats.counterStartedAt, getFormattedTimeRemaining, subscriptionLoading, timer]);
 
-  // Fetch additional anime details if needed
+  // Fetch additional drama details if needed
   useEffect(() => {
     // Don't fetch until countdown is initialized
     if (!countdownInitialized) {
       return;
     }
     
-    // If anime data is complete, use it directly
-    if (anime.synopsis && anime.genres) {
-      setAnimeDetails(anime);
+    // If drama data is complete, use it directly
+    if (drama.overview && drama.genres) {
+      setDramaDetails(drama);
       return;
     }
     
-    // Otherwise fetch more details from API
-    const fetchAnimeDetails = async () => {
+    // Otherwise fetch more details from TMDb API
+    const fetchDramaDetails = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`https://api.jikan.moe/v4/anime/${anime.mal_id}`);
+        const response = await fetch(`https://api.themoviedb.org/3/tv/${drama.id}?api_key=${TMDB_API_KEY}&language=en-US`);
         const data = await response.json();
         
-        if (data.data) {
-          setAnimeDetails(data.data);
+        if (data) {
+          setDramaDetails(data);
         } else {
           // If API failed, use existing data
-          setAnimeDetails(anime);
+          setDramaDetails(drama);
         }
       } catch (error) {
-        console.error('Error fetching anime details:', error);
+        console.error('Error fetching drama details:', error);
         // Fallback to existing data
-        setAnimeDetails(anime);
+        setDramaDetails(drama);
       } finally {
         setLoading(false);
       }
     };
     
-    fetchAnimeDetails();
-  }, [anime, countdownInitialized]);
+    fetchDramaDetails();
+  }, [drama, countdownInitialized]);
 
   // Main render function - show loading screen until initialized
   if (subscriptionLoading || !countdownInitialized) {
@@ -127,15 +121,14 @@ const AnimeDetails = ({ route, navigation }) => {
 
   const toggleFavorite = async () => {
     try {
-      let success = false;
-      
-      if (isInFavorites(anime.mal_id)) {
-        // Check if we can remove
-        if (!canMakeChange()) {
+      if (isInDramas(drama.id)) {
+        // Check if we can remove using the helper function
+        const canRemove = canRemoveFavorite();
+        if (!canRemove.allowed) {
           // Don't show error here - it's already handled by the context
           Alert.alert(
-            'Cooldown Active',
-            'You are currently in a cooldown period. Upgrade to premium to remove favorites without waiting.',
+            canRemove.reason === 'COOLDOWN' ? 'Cooldown Active' : 'Weekly Limit Reached',
+            canRemove.message + ' Upgrade to premium for unlimited changes.',
             [
               {
                 text: 'OK',
@@ -143,58 +136,68 @@ const AnimeDetails = ({ route, navigation }) => {
               },
               {
                 text: 'Upgrade to Premium',
-                onPress: () => navigateToPremiumUpgrade()
+                onPress: () => navigation.navigate('Subscription')
               }
             ]
           );
           return;
         }
         
-        // Remove from favorites
-        success = await removeFromFavorites(anime.mal_id);
-        if (success === true) {
-          Alert.alert('Success', `${anime.title} removed from favorites`);
+        console.log(`Attempting to remove drama ${drama.id} from favorites`);
+        const result = await removeFromDramas(drama.id);
+        console.log('Remove drama result:', result);
+        
+        if (result.success === true) {
+          console.log(`Successfully removed drama ${drama.id}`);
+          // Show success toast or message if desired
         }
-        // Don't show error if false - already handled by context
+        // Don't show error alert - already handled by the context
       } else {
-        // Check if we can add more
-        const remaining = getRemainingCounts();
-        if (remaining.anime <= 0) {
+        // Check if we can add more dramas using the helper function 
+        const canAdd = canAddDrama();
+        if (!canAdd.allowed) {
+          console.log(`Cannot add drama: ${canAdd.reason}, ${canAdd.message}`);
+          const MAX_FREE_DRAMAS = 5;
+          console.log(`Drama count check: dramas.length=${dramas.length}, usageStats.dramasCount=${usageStats.dramasCount}, max=${MAX_FREE_DRAMAS}`);
           Alert.alert(
-            'Anime Favorites Limit Reached',
-            `You've reached your limit of ${usageStats.isPremium ? 10 : 5} anime favorites. Please remove some or upgrade to premium for unlimited favorites.`,
+            'Drama Favorites Limit Reached',
+            canAdd.message + ' Please remove some or upgrade to premium for unlimited favorites.',
             [
               { text: 'OK' },
               { 
                 text: 'Upgrade to Premium', 
-                onPress: navigateToPremiumUpgrade
+                onPress: () => navigation.navigate('Subscription') 
               }
             ]
           );
           return;
         }
         
-        // Add to favorites
-        success = await addToFavorites(anime);
-        if (success === true) {
-          Alert.alert('Success', `${anime.title} added to favorites`);
+        // Add drama to favorites
+        console.log(`Attempting to add drama ${drama.id} to favorites`);
+        const result = await addToDramas(drama);
+        console.log('Add drama result:', result);
+        
+        if (result.success === true) {
+          console.log(`Successfully added drama ${drama.id}`);
+          // Show success toast or message if desired
         }
-        // Don't show error if false - already handled by context
+        // Don't show error alert - already handled by the context
       }
     } catch (error) {
-      console.error('Error toggling favorite:', error);
+      console.error('Error toggling drama favorite:', error);
       Alert.alert('Error', 'An unexpected error occurred. Please try again.');
     }
   };
 
   const renderGenres = () => {
-    const genres = animeDetails?.genres || [];
+    const genres = dramaDetails?.genres || [];
     if (genres.length === 0) return null;
     
     return (
       <View style={styles.genreContainer}>
         {genres.map((genre) => (
-          <View key={genre.mal_id} style={styles.genreTag}>
+          <View key={genre.id} style={styles.genreTag}>
             <Text style={styles.genreText}>{genre.name}</Text>
           </View>
         ))}
@@ -202,7 +205,7 @@ const AnimeDetails = ({ route, navigation }) => {
     );
   };
 
-  if (!animeDetails) {
+  if (!dramaDetails) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007bff" />
@@ -213,12 +216,16 @@ const AnimeDetails = ({ route, navigation }) => {
   return (
     <ScrollView style={styles.container}>
       <LoadingModal 
-        visible={processingFavorite}
-        message={isInFavorites(anime?.mal_id) ? 'Removing from favorites...' : 'Adding to favorites...'}
+        visible={processingDrama}
+        message={isInDramas(drama?.id) ? 'Removing from favorites...' : 'Adding to favorites...'}
       />
       <View style={styles.header}>
         <Image 
-          source={{ uri: animeDetails.images?.jpg?.large_image_url || animeDetails.images?.jpg?.image_url || 'https://via.placeholder.com/300x450' }} 
+          source={{ 
+            uri: dramaDetails.backdrop_path 
+              ? `${TMDB_IMAGE_BASE_URL}w780${dramaDetails.backdrop_path}` 
+              : `${TMDB_IMAGE_BASE_URL}w500${dramaDetails.poster_path}` || 'https://via.placeholder.com/780x440'
+          }} 
           style={styles.coverImage}
           resizeMode="cover"
         />
@@ -233,10 +240,10 @@ const AnimeDetails = ({ route, navigation }) => {
           <TouchableOpacity 
             style={[
               styles.favoriteButton,
-              processingFavorite && styles.disabledButton
+              processingDrama && styles.disabledButton
             ]}
             onPress={toggleFavorite}
-            disabled={processingFavorite}
+            disabled={processingDrama}
           >
             {loading ? (
               <ActivityIndicator size="small" color="#fff" />
@@ -253,40 +260,40 @@ const AnimeDetails = ({ route, navigation }) => {
       </View>
       
       <View style={styles.detailsContainer}>
-        <Text style={styles.title}>{animeDetails.title}</Text>
-        {animeDetails.title_english && animeDetails.title_english !== animeDetails.title && (
-          <Text style={styles.englishTitle}>{animeDetails.title_english}</Text>
+        <Text style={styles.title}>{dramaDetails.name}</Text>
+        {dramaDetails.original_name && dramaDetails.original_name !== dramaDetails.name && (
+          <Text style={styles.originalTitle}>{dramaDetails.original_name}</Text>
         )}
         
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
             <Icon type="ionicons" name="star" size={16} color="#FFD700" />
-            <Text style={styles.statText}>{animeDetails.score || 'N/A'}</Text>
+            <Text style={styles.statText}>{dramaDetails.vote_average.toFixed(1) || 'N/A'}</Text>
           </View>
           
           <View style={styles.statItem}>
-            <Icon type="ionicons" name="film-outline" size={16} color="#666" />
+            <Icon type="ionicons" name="tv-outline" size={16} color="#666" />
             <Text style={styles.statText}>
-              {animeDetails.type || 'N/A'} ({animeDetails.episodes || '?'} eps)
+              {dramaDetails.number_of_seasons || '?'} Seasons, {dramaDetails.number_of_episodes || '?'} Episodes
             </Text>
           </View>
           
           <View style={styles.statItem}>
             <Icon type="ionicons" name="calendar-outline" size={16} color="#666" />
-            <Text style={styles.statText}>{animeDetails.year || 'N/A'}</Text>
+            <Text style={styles.statText}>{dramaDetails.first_air_date?.substring(0, 4) || 'N/A'}</Text>
           </View>
           
           <View style={styles.statItem}>
-            <Icon type="ionicons" name="people-outline" size={16} color="#666" />
-            <Text style={styles.statText}>{animeDetails.members?.toLocaleString() || 'N/A'}</Text>
+            <Icon type="ionicons" name="globe-outline" size={16} color="#666" />
+            <Text style={styles.statText}>{dramaDetails.origin_country?.join(', ') || 'N/A'}</Text>
           </View>
         </View>
         
         {renderGenres()}
         
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Synopsis</Text>
-          <Text style={styles.synopsis}>{animeDetails.synopsis || 'No synopsis available.'}</Text>
+          <Text style={styles.sectionTitle}>Overview</Text>
+          <Text style={styles.synopsis}>{dramaDetails.overview || 'No overview available.'}</Text>
         </View>
         
         <View style={styles.section}>
@@ -294,36 +301,36 @@ const AnimeDetails = ({ route, navigation }) => {
           
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>Status:</Text>
-            <Text style={styles.infoValue}>{animeDetails.status || 'Unknown'}</Text>
+            <Text style={styles.infoValue}>{dramaDetails.status || 'Unknown'}</Text>
           </View>
           
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Aired:</Text>
-            <Text style={styles.infoValue}>{animeDetails.aired?.string || 'Unknown'}</Text>
+            <Text style={styles.infoLabel}>First Aired:</Text>
+            <Text style={styles.infoValue}>{dramaDetails.first_air_date || 'Unknown'}</Text>
           </View>
           
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Rating:</Text>
-            <Text style={styles.infoValue}>{animeDetails.rating || 'Unknown'}</Text>
+            <Text style={styles.infoLabel}>Last Aired:</Text>
+            <Text style={styles.infoValue}>{dramaDetails.last_air_date || 'Unknown'}</Text>
           </View>
           
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Studio:</Text>
+            <Text style={styles.infoLabel}>Networks:</Text>
             <Text style={styles.infoValue}>
-              {animeDetails.studios && animeDetails.studios.length > 0 
-                ? animeDetails.studios.map(s => s.name).join(', ') 
+              {dramaDetails.networks && dramaDetails.networks.length > 0 
+                ? dramaDetails.networks.map(n => n.name).join(', ') 
                 : 'Unknown'}
             </Text>
           </View>
           
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Source:</Text>
-            <Text style={styles.infoValue}>{animeDetails.source || 'Unknown'}</Text>
+            <Text style={styles.infoLabel}>Language:</Text>
+            <Text style={styles.infoValue}>{dramaDetails.original_language || 'Unknown'}</Text>
           </View>
           
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>Duration:</Text>
-            <Text style={styles.infoValue}>{animeDetails.duration || 'Unknown'}</Text>
+            <Text style={styles.infoLabel}>Popularity:</Text>
+            <Text style={styles.infoValue}>{dramaDetails.popularity?.toFixed(1) || 'Unknown'}</Text>
           </View>
         </View>
         
@@ -331,12 +338,12 @@ const AnimeDetails = ({ route, navigation }) => {
           style={[
             styles.actionButton, 
             isFavorite ? styles.removeButton : styles.addButton,
-            processingFavorite && styles.disabledButton
+            processingDrama && styles.disabledButton
           ]}
           onPress={toggleFavorite}
-          disabled={processingFavorite}
+          disabled={processingDrama}
         >
-          {processingFavorite ? (
+          {processingDrama ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
             <>
@@ -420,7 +427,7 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 5,
   },
-  englishTitle: {
+  originalTitle: {
     fontSize: 16,
     color: '#666',
     marginBottom: 15,
@@ -535,4 +542,4 @@ const styles = StyleSheet.create({
   }
 });
 
-export default AnimeDetails; 
+export default DramaDetails; 

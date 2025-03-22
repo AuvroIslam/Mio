@@ -71,148 +71,262 @@ const firestoreService = {
     try {
       console.log(`Adding anime ${anime.mal_id} to favorites for user ${userId}`);
       
-      // Update user document with new favorite
-      const userRef = doc(db, 'users', userId);
-      const userDoc = await getDoc(userRef);
+      // Check if user document exists
+      const userDocRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userDocRef);
       
       if (!userDoc.exists()) {
-        return { success: false, error: 'User profile not found' };
+        console.error(`User document not found for user ${userId}`);
+        return { success: false, error: 'User document not found' };
       }
       
+      // Check if anime is already in favorites to prevent duplicates
       const userData = userDoc.data();
-      const currentFavorites = userData.favorites || [];
+      const favorites = userData.favorites || [];
+      const favoritesData = userData.favoritesData || {};
       
-      // Check if anime is already a favorite
-      if (currentFavorites.includes(anime.mal_id)) {
-        return { success: true, exists: true };
+      const isAlreadyFavorite = favorites.includes(anime.mal_id) || favoritesData[anime.mal_id];
+      
+      if (isAlreadyFavorite) {
+        console.log(`Anime ${anime.mal_id} is already in favorites for user ${userId}`);
+        return { success: true, message: 'Already in favorites' };
       }
       
-      // First, update the animeUsers collection to track which users like this anime
-      // This is used for efficient matching
-      const animeUserRef = doc(db, 'animeUsers', anime.mal_id.toString());
-      const animeUserDoc = await getDoc(animeUserRef);
+      // Create a batch operation
+      const batch = writeBatch(db);
       
-      try {
-        if (animeUserDoc.exists()) {
-          // Add this user to the list of users who like this anime
-          const animeData = animeUserDoc.data();
-          const users = animeData.users || [];
-          
-          if (!users.includes(userId)) {
-            await updateDoc(animeUserRef, {
-              users: arrayUnion(userId)
-            });
-          }
-        } else {
-          // Create a new document for this anime
-          await setDoc(animeUserRef, {
-            animeId: anime.mal_id,
-            title: anime.title,
-            users: [userId]
-          });
-        }
-      } catch (animeError) {
-        console.error('Error updating animeUsers collection:', animeError);
-        // Fall back to the simpler but less efficient approach
-        try {
-          // Instead of updating the users array, just create a document in animeUsers
-          // indicating this user favorited this anime (for querying)
-          await setDoc(doc(db, 'animeUsers', `${anime.mal_id}_${userId}`), {
-            animeId: anime.mal_id,
-            userId: userId,
-            createdAt: serverTimestamp()
-          });
-          
-          // Debug logging - check if we saved the record
-          const testDoc = await getDoc(doc(db, 'animeUsers', `${anime.mal_id}_${userId}`));
-          console.log(`Debug: Created animeUsers record? ${testDoc.exists()}`);
-        } catch (fallbackError) {
-          console.error('Error with fallback animeUsers approach:', fallbackError);
-        }
+      // Add anime to global animeUsers collection to track popularity
+      const animeUsersRef = doc(db, 'animeUsers', anime.mal_id.toString());
+      const animeUsersDoc = await getDoc(animeUsersRef);
+      
+      if (animeUsersDoc.exists()) {
+        // Anime document exists, add user to the users array
+        batch.update(animeUsersRef, {
+          users: arrayUnion(userId)
+        });
+      } else {
+        // Create new anime document with this user
+        batch.set(animeUsersRef, {
+          animeId: anime.mal_id,
+          title: anime.title,
+          image: anime.images?.jpg?.image_url,
+          users: [userId]
+        });
       }
       
-      // Now update the user's favorites
-      const updatedFavorites = [...currentFavorites, anime.mal_id];
-      
-      // Store anime details in the user's favorites data
-      const favoriteData = userData.favoritesData || {};
-      favoriteData[anime.mal_id] = {
+      // Prepare anime data for storage
+      const animeData = {
+        mal_id: anime.mal_id,
         title: anime.title,
-        image: anime.images?.jpg?.image_url || '',
-        type: anime.type || 'Unknown',
-        episodes: anime.episodes || 'Unknown',
-        score: anime.score || 'N/A',
-        added: Timestamp.now()
+        synopsis: anime.synopsis,
+        episodes: anime.episodes,
+        score: anime.score,
+        year: anime.year,
+        images: anime.images,
+        genres: anime.genres,
+        studios: anime.studios,
+        addedAt: serverTimestamp()
       };
       
-      await updateDoc(userRef, {
-        favorites: updatedFavorites,
-        favoritesData: favoriteData
+      // Add anime to user's favorites list
+      batch.update(userDocRef, {
+        favorites: arrayUnion(anime.mal_id),
+        [`favoritesData.${anime.mal_id}`]: animeData
       });
+      
+      // Commit the batch
+      await batch.commit();
+      console.log(`Successfully added anime ${anime.mal_id} to favorites for user ${userId}`);
       
       return { success: true };
     } catch (error) {
-      console.error('Error adding favorite:', error);
+      console.error('Error adding anime to favorites:', error);
       return { success: false, error: error.message };
     }
   },
 
-  // Remove anime from favorites with bidirectional approach
-  removeAnimeFromFavorites: async (userId, animeId) => {
+  // Directly update the favorites count in Firestore to ensure consistency
+  updateFavoriteCount: async (userId, count) => {
     try {
-      console.log(`Removing anime ${animeId} from favorites for user ${userId}`);
+      console.log(`Directly updating favorite count for user ${userId} to ${count}`);
       
-      // Convert animeId to string if it's not already
-      animeId = animeId.toString();
-      
-      // Get user document
       const userRef = doc(db, 'users', userId);
-      const userDoc = await getDoc(userRef);
       
-      if (!userDoc.exists()) {
-        console.error('User document not found');
-        throw new Error('User document not found');
-      }
-      
-      // Start a batch write
-      const batch = writeBatch(db);
-      
-      // Remove from all favorite lists and data
-      batch.update(userRef, {
-        favorites: arrayRemove(animeId),
-        favoriteAnimeIds: arrayRemove(animeId),
-        [`favoritesData.${animeId}`]: deleteField()
+      // Update the subscription stats with the correct count
+      await updateDoc(userRef, {
+        'subscription.favoritesCount': count
       });
       
-      // Update the AnimeUsers collection 
-        const animeUserRef = doc(db, 'animeUsers', animeId);
-        const animeUserDoc = await getDoc(animeUserRef);
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating favorite count:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Directly update the drama count in Firestore to ensure consistency
+  updateDramaCount: async (userId, count) => {
+    try {
+      console.log(`Directly updating drama count for user ${userId} to ${count}`);
+      
+      const userRef = doc(db, 'users', userId);
+      
+      // Update the subscription stats with the correct count
+      await updateDoc(userRef, {
+        'subscription.dramasCount': count
+      });
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating drama count:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Function to remove an anime from user's favorites
+  removeAnimeFromFavorites: async (userId, animeId) => {
+    console.log(`[firestoreService] removeAnimeFromFavorites called with userId: ${userId}, animeId: ${animeId}`);
+    
+    try {
+      // Ensure animeId is a number for consistent comparison
+      const normalizedAnimeId = typeof animeId === 'string' ? parseInt(animeId, 10) : animeId;
+      console.log(`[firestoreService] Using normalized animeId: ${normalizedAnimeId} (${typeof normalizedAnimeId})`);
+      
+      const userRef = doc(db, 'users', userId);
+      const userSnap = await getDoc(userRef);
+      
+      if (!userSnap.exists()) {
+        console.error(`[firestoreService] User document not found for userId: ${userId}`);
+        return { success: false, error: 'User document not found' };
+      }
+      
+      const userData = userSnap.data();
+      
+      // Check if anime exists in either favorites array or favoritesData
+      const favoritesArray = userData.favorites || [];
+      const favoritesData = userData.favoritesData || {};
+      
+      console.log(`[firestoreService] Checking if anime ${normalizedAnimeId} exists in favorites`);
+      console.log(`[firestoreService] Favorites array length: ${favoritesArray.length}`);
+      console.log(`[firestoreService] FavoritesData keys: ${Object.keys(favoritesData).join(', ')}`);
+
+      // For older data structure, favorites might be just IDs or objects with mal_id
+      const existsInFavoritesArray = favoritesArray.some(fav => 
+        // Check if it's a primitive (number/string) or an object with mal_id
+        (typeof fav === 'object' ? fav.mal_id === normalizedAnimeId : Number(fav) === normalizedAnimeId)
+      );
+      
+      // For newer structure, check if it exists in favoritesData
+      const existsInFavoritesData = favoritesData.hasOwnProperty(normalizedAnimeId.toString());
+      
+      if (!existsInFavoritesArray && !existsInFavoritesData) {
+        console.log(`[firestoreService] Anime ${normalizedAnimeId} not found in favorites, nothing to remove`);
+        return { success: true, message: 'Not in favorites' };
+      }
+      
+      console.log(`[firestoreService] Found anime ${normalizedAnimeId} in favorites, removing it now`);
+      
+      // Prepare batch operations for atomic update
+      const batch = writeBatch(db);
+      
+      // Update the favorites array - remove the ID or object with this mal_id
+      if (existsInFavoritesArray) {
+        // First try removing it assuming it's a primitive value
+        batch.update(userRef, { 
+          favorites: arrayRemove(normalizedAnimeId) 
+        });
         
-        if (animeUserDoc.exists()) {
-          const animeData = animeUserDoc.data();
+        // Also try removing it as a string in case it's stored that way
+        batch.update(userRef, { 
+          favorites: arrayRemove(normalizedAnimeId.toString()) 
+        });
+        
+        // For older structure where favorites might contain full objects
+        batch.update(userRef, {
+          favorites: userData.favorites.filter(fav => 
+            typeof fav === 'object' ? fav.mal_id !== normalizedAnimeId : Number(fav) !== normalizedAnimeId
+          )
+        });
+      }
+      
+      // Remove from favoritesData using deleteField
+      if (existsInFavoritesData) {
+        batch.update(userRef, {
+          [`favoritesData.${normalizedAnimeId}`]: deleteField()
+        });
+      }
+      
+      // Remove from favoriteAnimeIds if it exists (legacy field)
+      if (userData.favoriteAnimeIds) {
+        batch.update(userRef, {
+          favoriteAnimeIds: arrayRemove(normalizedAnimeId),
+          favoriteAnimeIds: arrayRemove(normalizedAnimeId.toString())
+        });
+      }
+      
+      // Update the favorites count - get the new count after removals
+      const updatedCount = Math.max(0, (userData.favorites?.length || 0) - 1);
+      batch.update(userRef, { 
+        'subscription.favoritesCount': updatedCount
+      });
+      
+      // Commit the batch
+      await batch.commit();
+      
+      // Verify the removal was successful
+      const updatedUserSnap = await getDoc(userRef);
+      if (updatedUserSnap.exists()) {
+        const updatedUserData = updatedUserSnap.data();
+        const updatedFavoritesArray = updatedUserData.favorites || [];
+        const updatedFavoritesData = updatedUserData.favoritesData || {};
+        
+        const stillExistsInArray = updatedFavoritesArray.some(fav => 
+          (typeof fav === 'object' ? fav.mal_id === normalizedAnimeId : Number(fav) === normalizedAnimeId)
+        );
+        
+        const stillExistsInData = updatedFavoritesData.hasOwnProperty(normalizedAnimeId.toString());
+        
+        if (stillExistsInArray || stillExistsInData) {
+          console.error(`[firestoreService] Verification failed - anime ${normalizedAnimeId} still exists in favorites after removal`);
+          console.log(`[firestoreService] Still in array: ${stillExistsInArray}, Still in data: ${stillExistsInData}`);
           
-          // Filter out this user
-          const updatedUsers = animeData.users.filter(id => id !== userId);
-          
-          if (updatedUsers.length > 0) {
-            // Update the document with the new users array
-          batch.update(animeUserRef, {
-              users: updatedUsers,
-            updatedAt: Timestamp.now()
+          // Emergency final attempt using direct approach
+          try {
+            // Create a new cleaned array without this anime ID
+            const cleanedArray = updatedFavoritesArray.filter(fav => 
+              (typeof fav === 'object' ? fav.mal_id !== normalizedAnimeId : Number(fav) !== normalizedAnimeId)
+            );
+            
+            // Create a new cleaned favoritesData without this anime
+            const cleanedFavoritesData = {...updatedFavoritesData};
+            delete cleanedFavoritesData[normalizedAnimeId];
+            delete cleanedFavoritesData[normalizedAnimeId.toString()];
+            
+            // Update with clean data
+            await updateDoc(userRef, {
+              favorites: cleanedArray,
+              favoritesData: cleanedFavoritesData,
+              'subscription.favoritesCount': cleanedArray.length
             });
-          } else {
-          // If no users left, delete the document
-          batch.delete(animeUserRef);
+            
+            console.log(`[firestoreService] Emergency cleanup completed. New favorites count: ${cleanedArray.length}`);
+          } catch (emergencyError) {
+            console.error(`[firestoreService] Emergency cleanup failed:`, emergencyError);
+          }
+          
+          return { 
+            success: false, 
+            error: 'Verification failed - anime still exists after removal',
+            needsSecondAttempt: true
+          };
         }
       }
       
-      // Commit all changes
-      await batch.commit();
-      
-      return true;
+      console.log(`[firestoreService] Successfully removed anime ${normalizedAnimeId} from favorites`);
+      return { success: true };
     } catch (error) {
-      console.error('Error removing favorite:', error);
-      throw error;
+      console.error(`[firestoreService] Error removing anime from favorites:`, error);
+      return { success: false, error: error.message };
     }
   },
 
@@ -1233,6 +1347,176 @@ const firestoreService = {
       };
     } catch (error) {
       console.error('❌ Error checking cooldown:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Get user dramas
+  getUserDramas: async (userId) => {
+    try {
+      const userRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userRef);
+      
+      if (!userDoc.exists()) {
+        return [];
+      }
+      
+      const userData = userDoc.data();
+      
+      // Convert the dramasData object to array for UI display
+      if (userData.dramasData && typeof userData.dramasData === 'object') {
+        const dramasArray = Object.values(userData.dramasData);
+        return dramasArray;
+      } else {
+        // Return empty array if no dramas found
+        return [];
+      }
+    } catch (error) {
+      console.error('Error getting user dramas:', error);
+      throw error;
+    }
+  },
+
+  // Add a new favorite drama to user profile and update drama-user mapping
+  addDrama: async (userId, drama) => {
+    try {
+      console.log(`Adding drama ${drama.id} to favorites for user ${userId}`);
+      
+      // Get user document reference
+      const userRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userRef);
+      
+      // Create batch to update multiple collections atomically
+      const batch = writeBatch(db);
+      
+      // Extract only the needed fields from the drama object
+      const dramaData = {
+        id: drama.id,
+        name: drama.name,
+        original_name: drama.original_name || drama.name,
+        poster_path: drama.poster_path,
+        backdrop_path: drama.backdrop_path,
+        first_air_date: drama.first_air_date || null,
+        vote_average: drama.vote_average || 0,
+        origin_country: drama.origin_country || [],
+        overview: drama.overview || '',
+        clientKey: drama.clientKey || `drama_${drama.id}_${Math.random().toString(36).substring(2, 11)}`,
+        createdAt: serverTimestamp()
+      };
+      
+      // Check if drama is already in favorites
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        if (userData.dramasData && userData.dramasData[drama.id]) {
+          console.log(`Drama ${drama.id} already in favorites`);
+          return { success: true, message: 'Already in favorites' };
+        }
+      }
+      
+      // Update dramaUsers collection to track which users like this drama
+      const dramaUserRef = doc(db, 'dramaUsers', drama.id.toString());
+      const dramaUserDoc = await getDoc(dramaUserRef);
+      
+      if (dramaUserDoc.exists()) {
+        // Append this user to the existing users array
+        const dramaUserData = dramaUserDoc.data();
+        const users = dramaUserData.users || [];
+        
+        // Check if user already exists in the array
+        if (!users.includes(userId)) {
+          batch.update(dramaUserRef, {
+            users: arrayUnion(userId),
+            updatedAt: serverTimestamp()
+          });
+        }
+      } else {
+        // Create a new drama-users mapping
+        batch.set(dramaUserRef, {
+          dramaId: drama.id,
+          dramaName: drama.name,
+          users: [userId],
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      }
+      
+      // Update the user's dramas and dramasData fields
+      batch.update(userRef, {
+        [`dramasData.${drama.id}`]: dramaData,
+        dramas: arrayUnion(drama.id),
+        updatedAt: serverTimestamp()
+      });
+      
+      // Commit all changes in a single batch
+      await batch.commit();
+      
+      console.log(`Successfully added drama ${drama.id} to favorites`);
+      return { success: true };
+    } catch (error) {
+      console.error('Error adding drama to favorites:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Remove a drama from user's favorites
+  removeDramaFromFavorites: async (userId, dramaId) => {
+    try {
+      // Get user document reference
+      const userRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userRef);
+      
+      // Create batch to update multiple collections atomically
+      const batch = writeBatch(db);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        
+        // Check if drama exists in favorites
+        if (!userData.dramas || !userData.dramas.includes(dramaId)) {
+          console.log(`Drama ${dramaId} not in favorites`);
+          return { success: true, message: 'Drama not in favorites' };
+        }
+        
+        // Prepare update to remove from user's dramas array
+        batch.update(userRef, {
+          dramas: arrayRemove(dramaId),
+          [`dramasData.${dramaId}`]: deleteField(),
+          updatedAt: serverTimestamp()
+        });
+        
+        // Update the dramaUsers collection
+        const dramaUserRef = doc(db, 'dramaUsers', dramaId.toString());
+        const dramaUserDoc = await getDoc(dramaUserRef);
+        
+        if (dramaUserDoc.exists()) {
+          const dramaUserData = dramaUserDoc.data();
+          const users = dramaUserData.users || [];
+          
+          // Remove this user from the users array
+          if (users.includes(userId)) {
+            if (users.length === 1) {
+              // If this is the last user, delete the entire document
+              batch.delete(dramaUserRef);
+            } else {
+              // Otherwise just remove this user
+              batch.update(dramaUserRef, {
+                users: arrayRemove(userId),
+                updatedAt: serverTimestamp()
+              });
+            }
+          }
+        }
+        
+        // Commit all changes in batch
+        await batch.commit();
+        
+        console.log(`Successfully removed drama ${dramaId} from favorites`);
+        return { success: true };
+      }
+      
+      return { success: false, error: 'User document not found' };
+    } catch (error) {
+      console.error('Error removing drama from favorites:', error);
       return { success: false, error: error.message };
     }
   }

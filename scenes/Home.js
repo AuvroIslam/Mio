@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,20 +9,103 @@ import {
   Image,
   ActivityIndicator,
   Alert,
-  Modal
+  Modal,
+  RefreshControl
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import { useFavorites } from '../config/FavoritesContext';
+import { useDramas } from '../config/DramaContext';
 import { useSubscription } from '../config/SubscriptionContext';
 import firestoreService from '../services/firestoreService';
+import LoadingModal from '../components/LoadingModal';
+import useTimer from '../hooks/useTimer';
+
+const TMDB_API_KEY = 'b2b68cd65cf02c8da091b2857084bd4d';
+
+// Create a memoized anime item component
+const AnimeItem = memo(({ item, navigation, toggleFavorite }) => {
+  const handlePress = () => {
+    navigation.navigate('AnimeDetails', { anime: item });
+  };
+
+  const handleFavoritePress = () => {
+    toggleFavorite(item);
+  };
+
+  return (
+    <TouchableOpacity style={styles.animeContainer} onPress={handlePress}>
+      <Image
+        source={{ uri: item.images?.jpg?.image_url || 'https://via.placeholder.com/150' }}
+        style={styles.animeImage}
+        resizeMode="cover"
+      />
+      <View style={styles.animeInfo}>
+        <Text style={styles.animeTitle} numberOfLines={2}>
+          {item.title}
+        </Text>
+        <Text style={styles.animeGenre} numberOfLines={1}>
+          {item.genres?.map(genre => genre.name).join(', ') || 'N/A'}
+        </Text>
+        <TouchableOpacity 
+          style={[styles.favoriteButton, item.isFavorite ? styles.favoriteActive : null]} 
+          onPress={handleFavoritePress}
+        >
+          <Ionicons name={item.isFavorite ? 'heart' : 'heart-outline'} size={24} color={item.isFavorite ? '#ff4081' : '#666'} />
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
+// Create a memoized drama item component
+const DramaItem = memo(({ item, navigation, toggleDramaFavorite }) => {
+  const handlePress = () => {
+    navigation.navigate('DramaDetails', { drama: item });
+  };
+
+  const handleFavoritePress = () => {
+    toggleDramaFavorite(item);
+  };
+
+  return (
+    <TouchableOpacity style={styles.animeContainer} onPress={handlePress}>
+      <Image
+        source={{ 
+          uri: item.poster_path 
+            ? `https://image.tmdb.org/t/p/w500${item.poster_path}` 
+            : 'https://via.placeholder.com/150' 
+        }}
+        style={styles.animeImage}
+        resizeMode="cover"
+      />
+      <View style={styles.animeInfo}>
+        <Text style={styles.animeTitle} numberOfLines={2}>
+          {item.name}
+        </Text>
+        <Text style={styles.animeGenre} numberOfLines={1}>
+          {item.origin_country?.join(', ') || 'N/A'}
+        </Text>
+        <TouchableOpacity 
+          style={[styles.favoriteButton, item.isFavorite ? styles.favoriteActive : null]} 
+          onPress={handleFavoritePress}
+        >
+          <Ionicons name={item.isFavorite ? 'heart' : 'heart-outline'} size={24} color={item.isFavorite ? '#ff4081' : '#666'} />
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+});
 
 const Home = ({ navigation }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [animeResults, setAnimeResults] = useState([]);
+  const [dramaResults, setDramaResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState('');
   const [countdownInitialized, setCountdownInitialized] = useState(false);
+  const [activeTab, setActiveTab] = useState('anime'); // 'anime' or 'drama'
+  
   const { currentUser } = useAuth();
   const { 
     favorites, 
@@ -32,6 +115,13 @@ const Home = ({ navigation }) => {
     maxFavorites,
     processingFavorite
   } = useFavorites();
+  const { 
+    dramas,
+    isInDramas,
+    addToDramas,
+    removeFromDramas,
+    processingDrama
+  } = useDramas();
   const { 
     canMakeChange, 
     getFormattedTimeRemaining,
@@ -49,14 +139,12 @@ const Home = ({ navigation }) => {
   // Get weekly changes count from context method
   const weeklyChangesCount = getWeeklyChangesCount();
 
-  // Countdown timer effect
+  // Use our custom timer hook
+  const { setInterval, clearTimer } = useTimer();
+  
+  // Countdown timer
   useEffect(() => {
-    let interval = null;
-    
-    if (subscriptionLoading) {
-      // Don't initialize the countdown yet if subscription is still loading
-      return;
-    }
+    let timerKey;
     
     // Once subscription data is loaded, we can initialize the countdown
     if (usageStats.counterStartedAt) {
@@ -67,29 +155,37 @@ const Home = ({ navigation }) => {
       setCountdown(getFormattedTimeRemaining());
       
       // Start the countdown timer to update every second
-      interval = setInterval(() => {
+      timerKey = setInterval(() => {
         setCountdown(getFormattedTimeRemaining());
-      }, 1000);
+      }, 1000, 'countdown');
     } else {
       // No countdown needed, but we're still initialized
       setCountdown('');
       setCountdownInitialized(true);
     }
     
+    // Our custom hook will handle cleanup automatically, 
+    // but we can explicitly clear if needed
     return () => {
-      if (interval) clearInterval(interval);
+      if (timerKey) clearTimer(timerKey);
     };
-  }, [usageStats.counterStartedAt, subscriptionLoading]);
+  }, [usageStats.counterStartedAt, getFormattedTimeRemaining, setInterval, clearTimer]);
 
   // State to track which anime is being processed
   const [processingAnime, setProcessingAnime] = useState(null);
+  // State to track which drama is being processed
+  const [processingDramaItem, setProcessingDramaItem] = useState(null);
 
-  // Load seasonal anime on component mount
+  // Load seasonal anime and trending dramas on component mount
   useEffect(() => {
     if (countdownInitialized) {
-      loadSeasonalAnime();
+      if (activeTab === 'anime') {
+        loadSeasonalAnime();
+      } else {
+        loadTrendingDramas();
+      }
     }
-  }, [countdownInitialized]);
+  }, [countdownInitialized, activeTab]);
 
   // Update anime results with current favorite status when favorites change
   useEffect(() => {
@@ -104,11 +200,23 @@ const Home = ({ navigation }) => {
     }
   }, [favorites]);
 
+  // Update drama results with current favorite status when dramas change
+  useEffect(() => {
+    if (dramaResults.length > 0) {
+      // Update the isFavorite flag for each drama
+      setDramaResults(prev => 
+        prev.map(drama => ({
+          ...drama,
+          isFavorite: isInDramas(drama.id)
+        }))
+      );
+    }
+  }, [dramas]);
+
   // Add a useEffect to refresh UI when usageStats changes
   useEffect(() => {
     // This ensures the component re-renders when usageStats changes
     // (especially after cooldown resets changesThisWeek to 0)
-    // Clear previous change counter logs
   }, [usageStats]);
 
   // Render a small usage indicator 
@@ -116,12 +224,13 @@ const Home = ({ navigation }) => {
     const cooldownActive = isInCooldown();
     const { isPremium } = usageStats;
     const maxFavoritesDisplay = isPremium ? LIMITS.PREMIUM.MAX_FAVORITES : LIMITS.FREE.MAX_FAVORITES;
+    const currentFavorites = activeTab === 'anime' ? favorites.length : dramas.length;
     
     return (
       <View style={styles.usageIndicator}>
         <View style={styles.usageRow}>
           <Text style={styles.usageText}>
-            Favorites: {favorites.length}/{maxFavoritesDisplay === Infinity ? (
+            {activeTab === 'anime' ? 'Anime' : 'Drama'} Favorites: {currentFavorites}/{maxFavoritesDisplay === Infinity ? (
               <Text style={styles.premiumText}>Unlimited</Text>
             ) : maxFavoritesDisplay}
           </Text>
@@ -193,6 +302,93 @@ const Home = ({ navigation }) => {
     }
   };
 
+  const loadTrendingDramas = async () => {
+    try {
+      setLoading(true);
+      setDramaResults([]);
+      
+      // Define Asian regions as array
+      const regions = ['KR', 'CN', 'JP', 'TW', 'HK', 'TH']; // Korea, China, Japan, Taiwan, Hong Kong, Thailand
+      
+      let allDramas = [];
+      
+      // First try trending TV shows - usually more reliable
+      console.log('Fetching trending TV shows...');
+      const trendingResponse = await fetch(
+        `https://api.themoviedb.org/3/trending/tv/week?api_key=${TMDB_API_KEY}`
+      );
+      
+      if (trendingResponse.ok) {
+        const trendingData = await trendingResponse.json();
+        console.log(`Trending TV shows response: ${trendingData.results?.length} shows found`);
+        
+        // Filter trending shows by Asian regions
+        if (trendingData.results && trendingData.results.length > 0) {
+          const filteredDramas = trendingData.results.filter(show => 
+            show.origin_country && 
+            show.origin_country.some(country => regions.includes(country))
+          );
+          
+          console.log(`Filtered Asian dramas from trending: ${filteredDramas.length}`);
+          allDramas = [...allDramas, ...filteredDramas];
+        }
+      }
+      
+      // If we don't have enough dramas, fetch region-specific content
+      if (allDramas.length < 10) {
+        console.log('Not enough trending dramas, fetching by region...');
+        
+        // Create separate requests for each region
+        const requests = regions.map(region => {
+          console.log(`Fetching TV shows for region: ${region}`);
+          return fetch(`https://api.themoviedb.org/3/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=${region}&sort_by=popularity.desc`)
+            .then(res => res.json())
+            .then(data => {
+              console.log(`Region ${region} results: ${data.results?.length || 0} shows`);
+              return data;
+            });
+        });
+        
+        // Wait for all requests to complete
+        const responses = await Promise.all(requests);
+        
+        // Merge all results into a single array
+        responses.forEach(data => {
+          if (data.results && data.results.length > 0) {
+            allDramas = [...allDramas, ...data.results];
+          }
+        });
+      }
+      
+      // Remove duplicates (in case a show is from multiple countries)
+      const uniqueDramas = Array.from(new Map(allDramas.map(item => [item.id, item])).values());
+      console.log(`Total unique dramas found: ${uniqueDramas.length}`);
+      
+      if (uniqueDramas.length > 0) {
+        // Mark favorites in results for UI indication
+        const results = uniqueDramas.map(drama => ({
+          ...drama,
+          isFavorite: isInDramas(drama.id)
+        }));
+        
+        // Sort by popularity (descending)
+        results.sort((a, b) => b.popularity - a.popularity);
+        
+        // Limit to reasonable number to display
+        setDramaResults(results.slice(0, 20));
+      } else {
+        // If no results, show a message
+        setDramaResults([]);
+        Alert.alert('Error', 'Failed to load trending dramas');
+      }
+    } catch (error) {
+      console.error('Error loading trending dramas:', error);
+      Alert.alert('Error', 'Failed to load trending dramas. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const searchAnime = async () => {
     if (!searchQuery.trim()) {
       // If search is empty, load seasonal anime
@@ -224,247 +420,395 @@ const Home = ({ navigation }) => {
     }
   };
 
-  const handleSearch = () => {
-    if (searchQuery.trim()) {
-      searchAnime();
-    } else {
-      loadSeasonalAnime();
-    }
-  };
-
-  const toggleFavorite = async (anime) => {
-    if (!currentUser) {
-      Alert.alert('Login Required', 'Please login to add favorites.');
-      return;
-    }
-    
-    // If already processing a favorite operation, don't allow another one
-    if (processingFavorite) {
+  const searchDramas = async () => {
+    if (!searchQuery.trim()) {
+      // If search is empty, load trending dramas
+      loadTrendingDramas();
       return;
     }
     
     try {
-      // Set the anime being processed
-      setProcessingAnime(anime);
+      setLoading(true);
+      setDramaResults([]);
       
-      const isFavorite = isInFavorites(anime.mal_id);
-      let success = false;
+      // Define Asian regions
+      const regions = ['KR', 'CN', 'JP', 'TW', 'HK', 'TH'];
+      console.log(`Searching dramas with query: "${searchQuery}"`);
       
-      if (isFavorite) {
-        // Check if user can make changes (only for removals)
-        if (!canMakeChange()) {
-          Alert.alert(
-            'Weekly Limit Reached',
-            `You've used all your weekly changes. Please wait 2 minutes or upgrade to premium.`
-          );
-          setProcessingAnime(null);
-          return;
-        }
+      let searchResults = [];
+      
+      // First try the generic search
+      const response = await fetch(
+        `https://api.themoviedb.org/3/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(searchQuery)}&page=1`
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`Generic search returned ${data.results?.length || 0} results`);
         
+        if (data.results && data.results.length > 0) {
+          // Filter to only include Asian dramas based on origin_country
+          const asianResults = data.results.filter(show => 
+            show.origin_country && 
+            show.origin_country.some(country => regions.includes(country))
+          );
+          console.log(`Filtered Asian results: ${asianResults.length}`);
+          searchResults = [...searchResults, ...asianResults];
+        }
+      }
+      
+      // Try separate region searches with the query
+      const regionRequests = regions.map(region => {
+        console.log(`Searching region ${region} with query: "${searchQuery}"`);
+        return fetch(`https://api.themoviedb.org/3/discover/tv?api_key=${TMDB_API_KEY}&with_origin_country=${region}&with_keywords=${encodeURIComponent(searchQuery)}&sort_by=popularity.desc`)
+          .then(res => res.json())
+          .then(data => {
+            
+            return data;
+          });
+      });
+      
+      const regionResponses = await Promise.all(regionRequests);
+      
+      // Add results from region-specific searches
+      regionResponses.forEach(data => {
+        if (data.results && data.results.length > 0) {
+          searchResults = [...searchResults, ...data.results];
+        }
+      });
+      
+      // Remove duplicates
+      searchResults = Array.from(new Map(searchResults.map(item => [item.id, item])).values());
+      
+      
+      if (searchResults.length > 0) {
+        // Mark favorites in search results for UI consistency
+        const results = searchResults.map(drama => ({
+          ...drama,
+          isFavorite: isInDramas(drama.id)
+        }));
+        
+        // Sort by popularity (descending)
+        results.sort((a, b) => b.popularity - a.popularity);
+        
+        // Limit to reasonable number
+        setDramaResults(results.slice(0, 20));
+      } else {
+        setDramaResults([]);
+        console.log('No drama search results found');
+      }
+    } catch (error) {
+      console.error('Error searching dramas:', error);
+      Alert.alert('Search Error', 'Failed to search for dramas. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSearch = () => {
+    if (activeTab === 'anime') {
+      searchAnime();
+    } else {
+      searchDramas();
+    }
+  };
+
+  const toggleFavorite = async (anime) => {
+    if (processingAnime) {
+      console.log('Already processing an anime');
+      return;
+    }
+    
+    setProcessingAnime(anime.mal_id);
+    
+    try {
+      if (isInFavorites(anime.mal_id)) {
         // Remove from favorites
-        success = await removeFromFavorites(anime.mal_id);
-        if (success) {
-          Alert.alert('Success', 'Removed from favorites');
+        const result = await removeFromFavorites(anime.mal_id);
+        
+        if (result === true) {
+          // Update the local state to reflect the change
+          setAnimeResults(prevResults => 
+            prevResults.map(item => 
+              item.mal_id === anime.mal_id ? { ...item, isFavorite: false } : item
+            )
+          );
+          
+          // Show success message
+          console.log('Successfully removed from favorites');
+        } else {
+          // Don't show error message as it's already handled in the context
+          console.log('Could not remove from favorites - handled by context');
         }
       } else {
         // Add to favorites
-        success = await addToFavorites(anime);
-        if (success) {
-          Alert.alert('Success', 'Added to favorites');
+        const result = await addToFavorites(anime);
+        
+        if (result === true) {
+          // Update the local state to reflect the change
+          setAnimeResults(prevResults => 
+            prevResults.map(item => 
+              item.mal_id === anime.mal_id ? { ...item, isFavorite: true } : item
+            )
+          );
+          
+          // Show success message if needed
+          console.log('Successfully added to favorites');
+        } else {
+          // Don't show error message as it's already handled in the context
+          console.log('Could not add to favorites - handled by context');
         }
-      }
-      
-      // Only update UI if operation was successful
-      if (success) {
-        setAnimeResults(prev => 
-          prev.map(item => 
-            item.mal_id === anime.mal_id 
-              ? { ...item, isFavorite: !isFavorite } 
-              : item
-          )
-        );
       }
     } catch (error) {
       console.error('Error toggling favorite:', error);
-      Alert.alert('Error', 'Failed to update favorites');
+      Alert.alert('Error', 'An unexpected error occurred. Please try again.');
     } finally {
-      // Clear the processing anime
       setProcessingAnime(null);
     }
   };
 
-  const renderAnimeItem = ({ item }) => {
-    // Always use the context's isInFavorites function for the most accurate state
-    const isFavorite = isInFavorites(item.mal_id);
-    const isProcessing = processingFavorite && processingAnime?.mal_id === item.mal_id;
+  const toggleDramaFavorite = async (drama) => {
+    if (processingDramaItem || processingDrama) {
+      console.log('Already processing a drama');
+      return;
+    }
     
-    return (
-      <TouchableOpacity 
-        style={styles.animeCard}
-        onPress={() => navigation.navigate('AnimeDetails', { anime: item })}
-      >
-        <Image 
-          source={{ uri: item.images.jpg.image_url || 'https://via.placeholder.com/150' }} 
-          style={styles.animeImage}
-          resizeMode="cover"
-        />
-        <View style={styles.animeInfo}>
-          <Text style={styles.animeTitle} numberOfLines={2}>{item.title}</Text>
-          <Text style={styles.animeDetail}>Rating: {item.score || 'N/A'}</Text>
-          <Text style={styles.animeDetail} numberOfLines={1}>Type: {item.type || 'N/A'}</Text>
-          <Text style={styles.animeDetail} numberOfLines={1}>Episodes: {item.episodes || 'N/A'}</Text>
+    setProcessingDramaItem(drama);
+    
+    try {
+      if (isInDramas(drama.id)) {
+        // Remove from favorites
+        const result = await removeFromDramas(drama.id);
+        
+        if (result.success === true) {
+          // Update the local state to reflect the change
+          setDramaResults(prevResults => 
+            prevResults.map(item => 
+              item.id === drama.id ? { ...item, isFavorite: false } : item
+            )
+          );
           
-          <View style={styles.actionRow}>
-            {isFavorite ? (
-              <TouchableOpacity 
-                style={[
-                  styles.favoriteButton, 
-                  styles.favoriteButtonActive,
-                  processingFavorite && styles.disabledButton
-                ]}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  toggleFavorite(item);
-                }}
-                disabled={processingFavorite}
-              >
-                {isProcessing ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons name="heart-dislike" size={16} color="#fff" />
-                    <Text style={styles.favoriteButtonText}>Remove</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity 
-                style={[
-                  styles.favoriteButton,
-                  processingFavorite && styles.disabledButton
-                ]}
-                onPress={(e) => {
-                  e.stopPropagation();
-                  toggleFavorite(item);
-                }}
-                disabled={processingFavorite}
-              >
-                {isProcessing ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons name="heart" size={16} color="#fff" />
-                    <Text style={styles.favoriteButtonText}>Add</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-      </TouchableOpacity>
-    );
+          // Show success message
+          console.log('Successfully removed from drama favorites');
+        } else {
+          // Don't show error message as it's already handled in the context
+          console.log(`Could not remove from drama favorites - ${result.error || 'handled by context'}`);
+        }
+      } else {
+        // Add to favorites
+        const result = await addToDramas(drama);
+        
+        if (result.success === true) {
+          // Update the local state to reflect the change
+          setDramaResults(prevResults => 
+            prevResults.map(item => 
+              item.id === drama.id ? { ...item, isFavorite: true } : item
+            )
+          );
+          
+          // Show success message if needed
+          console.log('Successfully added to drama favorites');
+        } else {
+          // Don't show error message as it's already handled in the context
+          console.log(`Could not add to drama favorites - ${result.error || 'handled by context'}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling drama favorite:', error);
+      Alert.alert('Error', 'An unexpected error occurred. Please try again.');
+    } finally {
+      setProcessingDramaItem(null);
+    }
   };
+
+  // Memoize these functions to prevent unnecessary re-renders
+  const renderAnimeItem = useCallback(({ item }) => {
+    return (
+      <AnimeItem 
+        item={item} 
+        navigation={navigation} 
+        toggleFavorite={toggleFavorite} 
+      />
+    );
+  }, [navigation, toggleFavorite]);
+
+  const renderDramaItem = useCallback(({ item }) => {
+    return (
+      <DramaItem 
+        item={item} 
+        navigation={navigation} 
+        toggleDramaFavorite={toggleDramaFavorite} 
+      />
+    );
+  }, [navigation, toggleDramaFavorite]);
 
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
-      <Ionicons name="search" size={50} color="#ccc" />
-      <Text style={styles.emptyTitle}>No Results Found</Text>
+      <Ionicons 
+        name={activeTab === 'anime' ? "tv-outline" : "film-outline"} 
+        size={80} 
+        color="#ccc" 
+      />
       <Text style={styles.emptyText}>
-        Try a different search term or check out the seasonal anime.
+        {loading 
+          ? `Loading ${activeTab === 'anime' ? 'anime' : 'dramas'}...` 
+          : `No ${activeTab === 'anime' ? 'anime' : 'dramas'} found`
+        }
       </Text>
-      <TouchableOpacity 
-        style={styles.reloadButton} 
-        onPress={loadSeasonalAnime}
+      <Text style={styles.emptySubText}>
+        {!loading && `Try a different search term or check back later for more ${activeTab === 'anime' ? 'anime' : 'dramas'}.`}
+      </Text>
+    </View>
+  );
+
+  // Render tabs
+  const renderTabs = () => (
+    <View style={styles.tabContainer}>
+      <TouchableOpacity
+        style={[styles.tabButton, activeTab === 'anime' && styles.activeTab]}
+        onPress={() => setActiveTab('anime')}
       >
-        <Text style={styles.reloadButtonText}>View Seasonal Anime</Text>
+        <Ionicons 
+          name="tv-outline" 
+          size={20} 
+          color={activeTab === 'anime' ? "#FFFFFF" : "#007bff"} 
+        />
+        <Text style={[styles.tabText, activeTab === 'anime' && styles.activeTabText]}>
+          Anime
+        </Text>
+      </TouchableOpacity>
+      
+      <TouchableOpacity
+        style={[styles.tabButton, activeTab === 'drama' && styles.activeTab]}
+        onPress={() => setActiveTab('drama')}
+      >
+        <Ionicons 
+          name="film-outline" 
+          size={20} 
+          color={activeTab === 'drama' ? "#FFFFFF" : "#007bff"} 
+        />
+        <Text style={[styles.tabText, activeTab === 'drama' && styles.activeTabText]}>
+          Asian Drama
+        </Text>
       </TouchableOpacity>
     </View>
   );
 
-  // Main render function - show loading screen until initialized
+  // Main render
   if (subscriptionLoading || !countdownInitialized) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={styles.container}>
         <ActivityIndicator size="large" color="#007bff" />
-        <Text style={styles.loadingText}>
-          Loading...
-        </Text>
+        <Text style={styles.loadingText}>Loading...</Text>
       </View>
     );
   }
 
-  // Loading modal component for favorite operations
-  const renderLoadingModal = () => {
-    if (!processingFavorite || !processingAnime) return null;
-    
-    const isFavorite = isInFavorites(processingAnime.mal_id);
-    
-    return (
-      <Modal
-        transparent={true}
-        animationType="fade"
-        visible={processingFavorite}
-        onRequestClose={() => {}}
-      >
-        <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
-            <ActivityIndicator size="large" color="#007bff" />
-            <Text style={styles.modalText}>
-              {isFavorite ? 'Removing from favorites...' : 'Adding to favorites...'}
-            </Text>
-            <Text style={styles.modalAnimeTitle}>{processingAnime.title}</Text>
-          </View>
-        </View>
-      </Modal>
-    );
-  };
-
   return (
     <View style={styles.container}>
-      {renderLoadingModal()}
+      {/* Use the shared loading modal component */}
+      <LoadingModal 
+        visible={processingFavorite || processingDrama}
+        message={processingFavorite ? 'Updating favorites...' : 'Updating drama favorites...'}
+      />
       
+      {/* Subscription usage indicator */}
+      {renderUsageIndicator()}
+      
+      {/* Content type tabs */}
+      {renderTabs()}
+      
+      {/* Search Bar */}
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search anime..."
+          placeholder={`Search for ${activeTab === 'anime' ? 'anime' : 'Asian dramas'}...`}
           value={searchQuery}
           onChangeText={setSearchQuery}
           onSubmitEditing={handleSearch}
-          returnKeyType="search"
         />
-        <TouchableOpacity style={styles.searchButton} onPress={handleSearch}>
+        <TouchableOpacity 
+          style={styles.searchButton}
+          onPress={handleSearch}
+        >
           <Ionicons name="search" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
       
-      {renderUsageIndicator()}
-      
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007bff" />
-          <Text style={styles.loadingText}>
-            {searchQuery ? 'Searching...' : 'Loading Seasonal Anime...'}
-          </Text>
-        </View>
-      ) : (
+      {/* Results list */}
+      {activeTab === 'anime' ? (
         <FlatList
           data={animeResults}
-          keyExtractor={(item) => item.clientKey || `anime_${item.mal_id}_${Math.random().toString(36).substring(2,11)}`}
           renderItem={renderAnimeItem}
-          contentContainerStyle={styles.animeList}
+          keyExtractor={(item, index) => `anime_${item.mal_id}_${index}`}
+          contentContainerStyle={styles.listContainer}
           ListEmptyComponent={renderEmptyState}
+          numColumns={1}
+          onRefresh={loadSeasonalAnime}
+          refreshing={loading}
+        />
+      ) : (
+        <FlatList
+          data={dramaResults}
+          renderItem={renderDramaItem}
+          keyExtractor={(item, index) => `drama_${item.id}_${index}`}
+          contentContainerStyle={styles.listContainer}
+          ListEmptyComponent={renderEmptyState}
+          numColumns={1}
+          onRefresh={loadTrendingDramas}
+          refreshing={loading}
         />
       )}
     </View>
   );
 };
 
-// Styles
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f5f5',
-    padding: 10,
+    padding: 15,
+  },
+  usageIndicator: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginBottom: 10,
+    elevation: 2,
+  },
+  usageRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  usageText: {
+    fontSize: 14,
+    color: '#444',
+  },
+  premiumText: {
+    color: '#FFD700',
+    fontWeight: 'bold',
+  },
+  lockedText: {
+    color: '#dc3545',
+    fontWeight: 'bold',
+  },
+  premiumIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF8E1',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+  },
+  premiumIndicatorText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#DAA520',
+    marginLeft: 3,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -473,11 +817,11 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     height: 50,
-    borderColor: '#ddd',
-    borderWidth: 1,
+    backgroundColor: '#fff',
     borderRadius: 8,
     paddingHorizontal: 15,
-    backgroundColor: '#fff',
+    fontSize: 16,
+    elevation: 2,
   },
   searchButton: {
     width: 50,
@@ -487,18 +831,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRadius: 8,
     marginLeft: 10,
+    elevation: 2,
   },
-  animeCard: {
+  listContainer: {
+    paddingBottom: 20,
+  },
+  animeContainer: {
     flexDirection: 'row',
     backgroundColor: '#fff',
     borderRadius: 8,
     marginBottom: 15,
     overflow: 'hidden',
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 1.5,
   },
   animeImage: {
     width: 100,
@@ -514,170 +858,88 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 5,
   },
-  animeDetail: {
+  animeGenre: {
     fontSize: 14,
     color: '#555',
     marginBottom: 3,
   },
-  favoriteBadge: {
+  favoriteButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#28a745',
-    alignSelf: 'flex-start',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    marginTop: 8,
+    justifyContent: 'center',
+    padding: 8,
+    borderRadius: 5,
+    backgroundColor: '#e6f2ff',
+    marginTop: 5,
   },
-  favoriteBadgeText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginLeft: 4,
+  favoriteActive: {
+    backgroundColor: '#ff4081',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
-  },
-  emptyTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginTop: 20,
-    marginBottom: 10,
+    paddingTop: 50,
   },
   emptyText: {
-    textAlign: 'center',
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 20,
-  },
-  reloadButton: {
-    backgroundColor: '#007bff',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-  },
-  reloadButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
     fontSize: 18,
-    fontWeight: 'bold',
+    color: '#666',
+    textAlign: 'center',
     marginTop: 10,
   },
-  animeList: {
-    paddingBottom: 20,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-    marginTop: 8,
-  },
-  favoriteButton: {
-    backgroundColor: '#007bff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 20,
-  },
-  favoriteButtonActive: {
-    backgroundColor: '#dc3545',
-  },
-  favoriteButtonText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
-    marginLeft: 4,
-  },
-  usageIndicator: {
-    flexDirection: 'column',
-    padding: 12,
-    marginBottom: 15,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#dee2e6',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  usageRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  usageText: {
+  emptySubText: {
     fontSize: 14,
-    color: '#0056b3',
-    fontWeight: '500',
+    color: '#999',
+    textAlign: 'center',
+    marginTop: 5,
+    paddingHorizontal: 30,
   },
-  lockedText: {
-    color: '#dc3545',
-    fontWeight: 'bold',
-  },
-  modalContainer: {
+  modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  modalContent: {
-    backgroundColor: 'white',
+  loadingModal: {
+    backgroundColor: '#fff',
     borderRadius: 10,
     padding: 20,
     alignItems: 'center',
     elevation: 5,
-    width: '80%',
+    minWidth: 200,
   },
-  modalText: {
-    marginTop: 15,
+  loadingText: {
+    marginTop: 10,
     fontSize: 16,
-    textAlign: 'center',
     color: '#333',
   },
-  modalAnimeTitle: {
-    marginTop: 5,
-    fontSize: 14,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    color: '#007bff',
+  tabContainer: {
+    flexDirection: 'row',
+    marginBottom: 15,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#007bff',
   },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  premiumText: {
-    color: '#FFD700',
-    fontWeight: 'bold',
-  },
-  premiumIndicator: {
+  tabButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF8E1',
-    paddingVertical: 2,
-    paddingHorizontal: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#FFD700',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+  },
+  activeTab: {
+    backgroundColor: '#007bff',
+  },
+  tabText: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#007bff',
     marginLeft: 8,
   },
-  premiumIndicatorText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#996515',
-    marginLeft: 2,
+  activeTabText: {
+    color: '#fff',
   },
 });
 

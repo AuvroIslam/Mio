@@ -12,10 +12,14 @@ import {
   Image,
   Dimensions
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import firestoreService from '../services/firestoreService';
 import * as ImagePicker from 'expo-image-picker';
+import LoadingModal from '../components/LoadingModal';
+import Icon from '../components/Icon';
+
+// Get window dimensions once at the module level
+const { width: windowWidth } = Dimensions.get('window');
 
 // Add education options
 const EDUCATION_OPTIONS = [
@@ -111,6 +115,32 @@ const EditProfile = ({ navigation }) => {
     } catch (error) {
       console.error('Error picking image:', error);
       Alert.alert('Error', 'Failed to select image: ' + (error.message || 'Unknown error'));
+    }
+  };
+
+  // Add takePicture function
+  const takePicture = async () => {
+    try {
+      // Request camera permissions
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+      
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Required', 'We need access to your camera to take profile pictures');
+        return;
+      }
+      
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        aspect: photoIndex === 0 ? [1, 1] : [4, 3],
+        quality: 0.8,
+      });
+      
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setTempPhoto(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error taking picture:', error);
+      Alert.alert('Error', 'Failed to take picture: ' + (error.message || 'Unknown error'));
     }
   };
 
@@ -261,7 +291,7 @@ const EditProfile = ({ navigation }) => {
           />
         ) : (
           <View style={styles.photoPlaceholder}>
-            <Ionicons name="image-outline" size={40} color="#ccc" />
+            <Icon type="ionicons" name="image-outline" size={40} color="#adb5bd" />
             <Text style={styles.photoPlaceholderText}>{title}</Text>
           </View>
         )}
@@ -270,204 +300,205 @@ const EditProfile = ({ navigation }) => {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.sectionTitle}>Profile Photos</Text>
-      <Text style={styles.sectionDescription}>
-        Add up to 3 photos. First will be your profile picture.
-      </Text>
-      
-      <View style={styles.photoRow}>
-        {renderPhotoSelector(0, 'Profile Photo')}
-        {renderPhotoSelector(1, 'Photo 2')}
-        {renderPhotoSelector(2, 'Photo 3')}
-      </View>
-      
-      <Text style={styles.sectionTitle}>Personal Information</Text>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Gender</Text>
-        <View style={styles.staticField}>
-          <Text style={styles.staticFieldText}>
-            {gender === 'male' ? 'Male' : gender === 'female' ? 'Female' : 'Not specified'}
-          </Text>
-          <Text style={styles.staticFieldNote}>(Cannot be changed)</Text>
+    <>
+      <ScrollView style={styles.container}>
+        <Text style={styles.sectionTitle}>Profile Photos</Text>
+        <Text style={styles.sectionDescription}>
+          Add up to 3 photos. First will be your profile picture.
+        </Text>
+        
+        <View style={styles.photoRow}>
+          {renderPhotoSelector(0, 'Profile Photo')}
+          {renderPhotoSelector(1, 'Photo 2')}
+          {renderPhotoSelector(2, 'Photo 3')}
         </View>
-      </View>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Age (must be 18+)</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter your age"
-          value={age}
-          onChangeText={setAge}
-          keyboardType="numeric"
-          maxLength={3}
-        />
-      </View>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Education</Text>
+        
+        <Text style={styles.sectionTitle}>Personal Information</Text>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Gender</Text>
+          <View style={styles.staticField}>
+            <Text style={styles.staticFieldText}>
+              {gender === 'male' ? 'Male' : gender === 'female' ? 'Female' : 'Not specified'}
+            </Text>
+            <Text style={styles.staticFieldNote}>(Cannot be changed)</Text>
+          </View>
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Age (must be 18+)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Enter your age"
+            value={age}
+            onChangeText={setAge}
+            keyboardType="numeric"
+            maxLength={3}
+          />
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Education</Text>
+          <TouchableOpacity
+            style={styles.pickerButton}
+            onPress={() => setShowEducationOptions(true)}
+          >
+            <Text style={education ? styles.pickerText : styles.pickerPlaceholder}>
+              {education || 'Select your education level'}
+            </Text>
+            <Icon type="ionicons" name="chevron-down" size={20} color="#6c757d" />
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Location</Text>
+          <View style={styles.staticField}>
+            <Text style={styles.staticFieldText}>
+              {location || 'Not specified'}
+            </Text>
+            <Text style={styles.staticFieldNote}>(Cannot be changed)</Text>
+          </View>
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Bio (max 150 characters)</Text>
+          <TextInput
+            style={styles.bioInput}
+            placeholder="Write a short bio about yourself..."
+            value={bio}
+            onChangeText={setBio}
+            multiline
+            maxLength={150}
+          />
+          <Text style={styles.charCount}>{bio.length}/150</Text>
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Your hot take about any anime</Text>
+          <TextInput
+            style={styles.bioInput}
+            placeholder="Share your controversial opinion..."
+            value={hotTake}
+            onChangeText={setHotTake}
+            multiline
+          />
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Your most underrated anime</Text>
+          <TextInput
+            style={styles.bioInput}
+            placeholder="What amazing anime are people missing out on?"
+            value={underratedAnime}
+            onChangeText={setUnderratedAnime}
+            multiline
+          />
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Favorite band or music artist</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Who do you love listening to?"
+            value={favoriteBand}
+            onChangeText={setFavoriteBand}
+          />
+        </View>
+        
+        <Text style={styles.sectionTitle}>Match Preferences</Text>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>I want to match with</Text>
+          <View style={styles.radioContainer}>
+            <TouchableOpacity 
+              style={[styles.radioButton, matchGender === 'male' && styles.radioSelected]}
+              onPress={() => setMatchGender('male')}
+            >
+              <Text style={[styles.radioText, matchGender === 'male' && styles.radioTextSelected]}>
+                Men
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.radioButton, matchGender === 'female' && styles.radioSelected]}
+              onPress={() => setMatchGender('female')}
+            >
+              <Text style={[styles.radioText, matchGender === 'female' && styles.radioTextSelected]}>
+                Women
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.radioButton, matchGender === 'everyone' && styles.radioSelected]}
+              onPress={() => setMatchGender('everyone')}
+            >
+              <Text style={[styles.radioText, matchGender === 'everyone' && styles.radioTextSelected]}>
+                Everyone
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>Match location</Text>
+          <View style={styles.radioContainer}>
+            <TouchableOpacity 
+              style={[styles.radioButton, matchLocation === 'local' && styles.radioSelected]}
+              onPress={() => setMatchLocation('local')}
+            >
+              <Text style={[styles.radioText, matchLocation === 'local' && styles.radioTextSelected]}>
+                Local only
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={[styles.radioButton, matchLocation === 'worldwide' && styles.radioSelected]}
+              onPress={() => setMatchLocation('worldwide')}
+            >
+              <Text style={[styles.radioText, matchLocation === 'worldwide' && styles.radioTextSelected]}>
+                Worldwide
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        
         <TouchableOpacity
-          style={styles.pickerButton}
-          onPress={() => setShowEducationOptions(true)}
+          style={styles.saveButton}
+          onPress={saveProfile}
+          disabled={loading}
         >
-          <Text style={education ? styles.pickerText : styles.pickerPlaceholder}>
-            {education || 'Select your education level'}
-          </Text>
-          <Ionicons name="chevron-down" size={24} color="#007bff" />
+          {loading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.saveButtonText}>Save Changes</Text>
+          )}
         </TouchableOpacity>
-      </View>
+      </ScrollView>
       
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Location</Text>
-        <View style={styles.staticField}>
-          <Text style={styles.staticFieldText}>
-            {location || 'Not specified'}
-          </Text>
-          <Text style={styles.staticFieldNote}>(Cannot be changed)</Text>
-        </View>
-      </View>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Bio (max 150 characters)</Text>
-        <TextInput
-          style={styles.bioInput}
-          placeholder="Write a short bio about yourself..."
-          value={bio}
-          onChangeText={setBio}
-          multiline
-          maxLength={150}
-        />
-        <Text style={styles.charCount}>{bio.length}/150</Text>
-      </View>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Your hot take about any anime</Text>
-        <TextInput
-          style={styles.bioInput}
-          placeholder="Share your controversial opinion..."
-          value={hotTake}
-          onChangeText={setHotTake}
-          multiline
-        />
-      </View>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Your most underrated anime</Text>
-        <TextInput
-          style={styles.bioInput}
-          placeholder="What amazing anime are people missing out on?"
-          value={underratedAnime}
-          onChangeText={setUnderratedAnime}
-          multiline
-        />
-      </View>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Favorite band or music artist</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Who do you love listening to?"
-          value={favoriteBand}
-          onChangeText={setFavoriteBand}
-        />
-      </View>
-      
-      <Text style={styles.sectionTitle}>Match Preferences</Text>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>I want to match with</Text>
-        <View style={styles.radioContainer}>
-          <TouchableOpacity 
-            style={[styles.radioButton, matchGender === 'male' && styles.radioSelected]}
-            onPress={() => setMatchGender('male')}
-          >
-            <Text style={[styles.radioText, matchGender === 'male' && styles.radioTextSelected]}>
-              Men
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.radioButton, matchGender === 'female' && styles.radioSelected]}
-            onPress={() => setMatchGender('female')}
-          >
-            <Text style={[styles.radioText, matchGender === 'female' && styles.radioTextSelected]}>
-              Women
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.radioButton, matchGender === 'everyone' && styles.radioSelected]}
-            onPress={() => setMatchGender('everyone')}
-          >
-            <Text style={[styles.radioText, matchGender === 'everyone' && styles.radioTextSelected]}>
-              Everyone
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      
-      <View style={styles.inputGroup}>
-        <Text style={styles.label}>Match location</Text>
-        <View style={styles.radioContainer}>
-          <TouchableOpacity 
-            style={[styles.radioButton, matchLocation === 'local' && styles.radioSelected]}
-            onPress={() => setMatchLocation('local')}
-          >
-            <Text style={[styles.radioText, matchLocation === 'local' && styles.radioTextSelected]}>
-              Local only
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.radioButton, matchLocation === 'worldwide' && styles.radioSelected]}
-            onPress={() => setMatchLocation('worldwide')}
-          >
-            <Text style={[styles.radioText, matchLocation === 'worldwide' && styles.radioTextSelected]}>
-              Worldwide
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      
-      <TouchableOpacity
-        style={[styles.saveButton, loading && styles.disabledButton]}
-        onPress={saveProfile}
-        disabled={loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.saveButtonText}>Save Profile</Text>
-        )}
-      </TouchableOpacity>
-      
+      {/* Show loading modal when loading */}
+      <LoadingModal
+        visible={loading}
+        message="Saving profile changes..."
+      />
+
       {/* Education Options Modal */}
       <Modal
-        visible={showEducationOptions}
         transparent={true}
-        animationType="slide"
+        visible={showEducationOptions}
+        onRequestClose={() => setShowEducationOptions(false)}
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Select Education</Text>
-            <ScrollView>
-              {EDUCATION_OPTIONS.map((option, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.optionItem}
-                  onPress={() => {
-                    setEducation(option);
-                    setShowEducationOptions(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.optionText,
-                    education === option && styles.selectedOptionText
-                  ]}>
-                    {option}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            {EDUCATION_OPTIONS.map((option) => (
+              <TouchableOpacity
+                key={option}
+                style={styles.educationOption}
+                onPress={() => {
+                  setEducation(option);
+                  setShowEducationOptions(false);
+                }}
+              >
+                <Text style={styles.educationOptionText}>{option}</Text>
+              </TouchableOpacity>
+            ))}
             <TouchableOpacity
               style={styles.modalCloseButton}
               onPress={() => setShowEducationOptions(false)}
@@ -477,69 +508,58 @@ const EditProfile = ({ navigation }) => {
           </View>
         </View>
       </Modal>
-      
+
       {/* Photo Upload Modal */}
       <Modal
         visible={showProfileModal}
         transparent={true}
-        animationType="slide"
+        onRequestClose={() => setShowProfileModal(false)}
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>
-              {photoIndex === 0 ? 'Profile Photo' : `Photo ${photoIndex + 1}`}
+              {photos[photoIndex]?.url ? 'Change Photo' : 'Add Photo'}
             </Text>
-            
-            {tempPhoto ? (
-              <View style={styles.previewContainer}>
-                <Image 
-                  source={{ uri: tempPhoto }} 
-                  style={styles.previewImage} 
-                  resizeMode="contain"
-                />
-                
-                <View style={styles.previewActions}>
-                  <TouchableOpacity 
-                    style={styles.previewCancel}
-                    onPress={() => setTempPhoto(null)}
-                  >
-                    <Text style={styles.previewButtonText}>Cancel</Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity 
-                    style={styles.previewUpload}
-                    onPress={() => uploadPhoto(tempPhoto)}
-                  >
-                    <Text style={styles.previewButtonText}>Upload</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : (
-              <View style={styles.photoActions}>
-                <TouchableOpacity 
-                  style={styles.photoAction}
-                  onPress={pickImage}
-                >
-                  <Ionicons name="camera" size={24} color="#007bff" />
-                  <Text style={styles.photoActionText}>
-                    {photos && photos[photoIndex] ? 'Change Photo' : 'Add Photo'}
-                  </Text>
-                </TouchableOpacity>
-                
-                {photos && photos[photoIndex] && (
-                  <TouchableOpacity 
-                    style={[styles.photoAction, styles.photoActionRemove]}
-                    onPress={() => removePhoto(photoIndex)}
-                  >
-                    <Ionicons name="trash" size={24} color="#dc3545" />
-                    <Text style={[styles.photoActionText, styles.photoActionTextRemove]}>
-                      Remove Photo
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
+            {tempPhoto && (
+              <Image
+                source={{ uri: tempPhoto }}
+                style={styles.previewImage}
+                resizeMode="cover"
+              />
             )}
-            
+            <View style={styles.photoButtonsContainer}>
+              <TouchableOpacity 
+                style={styles.photoButton}
+                onPress={takePicture}
+              >
+                <Text style={styles.photoButtonText}>Take Photo</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.photoButton}
+                onPress={pickImage}
+              >
+                <Text style={styles.photoButtonText}>Choose from Gallery</Text>
+              </TouchableOpacity>
+              
+              {tempPhoto && (
+                <TouchableOpacity 
+                  style={styles.uploadButton}
+                  onPress={() => uploadPhoto(tempPhoto)}
+                >
+                  <Text style={styles.uploadButtonText}>Upload</Text>
+                </TouchableOpacity>
+              )}
+              
+              {photos[photoIndex]?.url && !tempPhoto && (
+                <TouchableOpacity 
+                  style={styles.deletePhotoButton}
+                  onPress={() => removePhoto(photoIndex)}
+                >
+                  <Text style={styles.deletePhotoText}>Delete Photo</Text>
+                </TouchableOpacity>
+              )}
+            </View>
             <TouchableOpacity
               style={styles.modalCloseButton}
               onPress={() => {
@@ -552,7 +572,7 @@ const EditProfile = ({ navigation }) => {
           </View>
         </View>
       </Modal>
-    </ScrollView>
+    </>
   );
 };
 
@@ -580,8 +600,8 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   photoSelector: {
-    width: Dimensions.get('window').width / 3.5,
-    height: Dimensions.get('window').width / 3.5,
+    width: windowWidth / 3.5,
+    height: windowWidth / 3.5,
     borderRadius: 8,
     overflow: 'hidden',
     backgroundColor: '#e9ecef',
@@ -799,8 +819,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   previewImage: {
-    width: Dimensions.get('window').width * 0.7,
-    height: Dimensions.get('window').width * 0.7,
+    width: windowWidth * 0.7,
+    height: windowWidth * 0.7,
     borderRadius: 8,
     marginBottom: 16,
   },
@@ -827,6 +847,53 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     color: '#212529',
+  },
+  photoButtonsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
+  },
+  photoButton: {
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#ced4da',
+    borderRadius: 8,
+    backgroundColor: '#e9ecef',
+  },
+  photoButtonText: {
+    fontSize: 16,
+    color: '#007bff',
+  },
+  deletePhotoButton: {
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#ced4da',
+    borderRadius: 8,
+    backgroundColor: '#f8f9fa',
+  },
+  deletePhotoText: {
+    fontSize: 16,
+    color: '#dc3545',
+  },
+  educationOption: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e9ecef',
+  },
+  educationOptionText: {
+    fontSize: 16,
+    color: '#212529',
+  },
+  uploadButton: {
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#28a745',
+    borderRadius: 8,
+    backgroundColor: '#e6f4ea',
+  },
+  uploadButtonText: {
+    fontSize: 16,
+    color: '#28a745',
   },
 });
 

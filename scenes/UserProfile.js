@@ -6,15 +6,15 @@ import {
   FlatList,
   Image,
   TouchableOpacity,
-  ActivityIndicator,
   Alert,
-  Dimensions,
-  ScrollView
+  ActivityIndicator,
+  Dimensions
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../config/AuthContext';
 import firestoreService from '../services/firestoreService';
 import { db } from '../config/firebaseConfig';
+import LoadingModal from '../components/LoadingModal';
+import Icon from '../components/Icon';
 
 const UserProfile = ({ route, navigation }) => {
   const { userId } = route.params;
@@ -150,7 +150,7 @@ const UserProfile = ({ route, navigation }) => {
           <Text style={styles.animeDetail}>Episodes: {item.episodes || 'N/A'}</Text>
           {isMutual && (
             <View style={styles.mutualBadge}>
-              <Ionicons name="heart" size={12} color="#fff" />
+              <Icon type="ionicons" name="heart" size={12} color="#fff" />
               <Text style={styles.mutualText}>Mutual Favorite</Text>
             </View>
           )}
@@ -182,14 +182,14 @@ const UserProfile = ({ route, navigation }) => {
     return (
       <View style={styles.profileDetails}>
         <View style={styles.infoRow}>
-          <Ionicons name="person" size={20} color="#007bff" style={styles.infoIcon} />
+          <Icon type="ionicons" name="person" size={20} color="#007bff" style={styles.infoIcon} />
           <Text style={styles.infoLabel}>Name:</Text>
           <Text style={styles.infoValue}>{user.userName || 'User'}</Text>
         </View>
 
         {user.gender && (
           <View style={styles.infoRow}>
-            <Ionicons name="transgender" size={20} color="#007bff" style={styles.infoIcon} />
+            <Icon type="ionicons" name="transgender" size={20} color="#007bff" style={styles.infoIcon} />
             <Text style={styles.infoLabel}>Gender:</Text>
             <Text style={styles.infoValue}>{user.gender}</Text>
           </View>
@@ -197,7 +197,7 @@ const UserProfile = ({ route, navigation }) => {
 
         {user.age && (
           <View style={styles.infoRow}>
-            <Ionicons name="calendar" size={20} color="#007bff" style={styles.infoIcon} />
+            <Icon type="ionicons" name="calendar" size={20} color="#007bff" style={styles.infoIcon} />
             <Text style={styles.infoLabel}>Age:</Text>
             <Text style={styles.infoValue}>{user.age}</Text>
           </View>
@@ -205,7 +205,7 @@ const UserProfile = ({ route, navigation }) => {
 
         {user.education && (
           <View style={styles.infoRow}>
-            <Ionicons name="school" size={20} color="#007bff" style={styles.infoIcon} />
+            <Icon type="ionicons" name="school" size={20} color="#007bff" style={styles.infoIcon} />
             <Text style={styles.infoLabel}>Education:</Text>
             <Text style={styles.infoValue}>{user.education}</Text>
           </View>
@@ -213,7 +213,7 @@ const UserProfile = ({ route, navigation }) => {
 
         {user.location && (
           <View style={styles.infoRow}>
-            <Ionicons name="location" size={20} color="#007bff" style={styles.infoIcon} />
+            <Icon type="ionicons" name="location" size={20} color="#007bff" style={styles.infoIcon} />
             <Text style={styles.infoLabel}>Location:</Text>
             <Text style={styles.infoValue}>{user.location}</Text>
           </View>
@@ -242,7 +242,7 @@ const UserProfile = ({ route, navigation }) => {
 
         {user.bio && (
           <View style={styles.infoRow}>
-            <Ionicons name="book" size={20} color="#007bff" style={styles.infoIcon} />
+            <Icon type="ionicons" name="book" size={20} color="#007bff" style={styles.infoIcon} />
             <Text style={styles.infoLabel}>Bio:</Text>
             <Text style={styles.infoValue}>{user.bio}</Text>
           </View>
@@ -269,7 +269,7 @@ const UserProfile = ({ route, navigation }) => {
         <>
           <View style={styles.profileHeader}>
             <View style={styles.userInfo}>
-              <Ionicons name="person-circle" size={80} color="#007bff" />
+              <Icon type="ionicons" name="person-circle" size={80} color="#007bff" />
               <Text style={styles.username}>{user?.userName || 'User'}</Text>
               <Text style={styles.favoriteCount}>
                 {userFavorites.length} Favorite{userFavorites.length !== 1 && 's'}
@@ -277,7 +277,7 @@ const UserProfile = ({ route, navigation }) => {
             </View>
             {currentUser?.uid !== userId && (
               <TouchableOpacity style={styles.chatButton} onPress={handleChatPress}>
-                <Ionicons name="chatbubble-outline" size={20} color="#fff" />
+                <Icon type="ionicons" name="chatbubble-outline" size={20} color="#fff" />
                 <Text style={styles.chatButtonText}>Message</Text>
               </TouchableOpacity>
             )}
